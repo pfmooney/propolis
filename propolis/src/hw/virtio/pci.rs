@@ -471,6 +471,9 @@ impl pci::Device for PciVirtio {
         state.intr_mode_updating = false;
         self.state_cv.notify_all();
     }
+    fn quiesce(&self, ctx: &DispCtx) {
+        self.dev.quiesce(ctx);
+    }
 }
 
 struct IsrIntr {
