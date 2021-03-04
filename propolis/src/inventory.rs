@@ -1,7 +1,10 @@
 use std::any::Any;
+use std::collections::btree_map;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+use crate::dispatch::DispCtx;
 
 pub struct Inventory {
     inner: Mutex<InventoryInner>,
@@ -32,6 +35,26 @@ impl Inventory {
             );
         }
     }
+    pub fn iter_over(&self, f: impl Fn(&mut Iter)) {
+        let inner = self.inner.lock().unwrap();
+        let mut iter = Iter { inner: inner.entities.iter() };
+
+        f(&mut iter);
+    }
+}
+
+pub struct Iter<'a> {
+    inner: btree_map::Iter<'a, EntityID, Record>,
+}
+impl<'a> std::iter::Iterator for Iter<'a> {
+    type Item = &'a Arc<dyn Entity>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.inner.next() {
+            Some((_id, rec)) => Some(&rec.ent),
+            None => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -55,7 +78,10 @@ struct Record {
     name: String,
 }
 
-pub trait Entity: Send + Sync + 'static {}
+pub trait Entity: Send + Sync + 'static {
+    #[allow(unused_variables)]
+    fn quiesce(&self, ctx: &DispCtx) {}
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct EntityID {

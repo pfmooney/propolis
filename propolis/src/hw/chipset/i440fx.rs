@@ -163,7 +163,16 @@ impl SelfArc for I440Fx {
         &self.sa_cell
     }
 }
-impl Entity for I440Fx {}
+impl Entity for I440Fx {
+    fn quiesce(&self, ctx: &DispCtx) {
+        let pci_bus = self.pci_bus.lock().unwrap();
+        for (_slot, _func, endp) in pci_bus.iter() {
+            if let Some(devinst) = endp.as_devinst() {
+                devinst.quiesce(ctx);
+            }
+        }
+    }
+}
 
 struct LNKPin {
     inner: Mutex<LNKPinInner>,

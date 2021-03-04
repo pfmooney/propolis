@@ -21,6 +21,9 @@ pub trait VirtioDevice: Send + Sync + 'static {
     fn queue_notify(&self, vq: &Arc<VirtQueue>, ctx: &DispCtx);
 
     #[allow(unused_variables)]
+    fn quiesce(&self, ctx: &DispCtx) {}
+
+    #[allow(unused_variables)]
     fn device_reset(&self, ctx: &DispCtx) {}
     #[allow(unused_variables)]
     fn attach(&self, queues: &[Arc<VirtQueue>]) {}

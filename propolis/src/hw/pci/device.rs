@@ -710,6 +710,11 @@ impl DeviceInst {
         let inner = Arc::clone(&self.inner_any);
         f(Arc::downcast(inner).unwrap())
     }
+
+    pub fn quiesce(&self, ctx: &DispCtx) {
+        // TODO: quiesce other state
+        self.inner.quiesce(ctx);
+    }
 }
 
 impl Endpoint for DeviceInst {
@@ -848,6 +853,10 @@ pub trait Device: Send + Sync + 'static {
     fn interrupt_mode_change(&self, mode: IntrMode) {}
     #[allow(unused_variables)]
     fn msi_update(&self, info: MsiUpdate, ctx: &DispCtx) {}
+
+    #[allow(unused_variables)]
+    fn quiesce(&self, ctx: &DispCtx) {}
+
     // TODO
     // fn cap_read(&self);
     // fn cap_write(&self);

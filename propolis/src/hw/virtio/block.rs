@@ -85,6 +85,10 @@ impl VirtioDevice for VirtioBlock {
         // XXX: real features
     }
 
+    fn quiesce(&self, ctx: &DispCtx) {
+        self.bdev.quiesce(ctx);
+    }
+
     fn queue_notify(&self, vq: &Arc<VirtQueue>, ctx: &DispCtx) {
         let mem = &ctx.mctx.memctx();
 
@@ -199,7 +203,9 @@ impl BlockReq for Request {
         };
         self.vq.push_used(&mut self.chain, mem, ctx);
     }
-
+    fn abort(self, _ctx: &DispCtx) {
+        // XXX: Until vq tracks outstanding requests, abort is simple
+    }
     fn next_buf(&mut self) -> Option<GuestRegion> {
         if self.xfer_left == 0 {
             return None;

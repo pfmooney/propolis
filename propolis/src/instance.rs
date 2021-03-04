@@ -141,6 +141,16 @@ impl Instance {
             f(next_state)
         }
     }
+    fn quiesce_inventory(&self, state: &MutexGuard<InnerState>) {
+        assert_eq!(state.current, State::Quiesce);
+        state.disp.with_ctx(|ctx| {
+            state.inv.iter_over(|iter| {
+                for ent in iter {
+                    ent.quiesce(ctx);
+                }
+            });
+        });
+    }
 
     fn drive_state(&self) {
         let mut state = self.state.lock().unwrap();
@@ -200,6 +210,7 @@ impl Instance {
                 },
                 State::Quiesce => {
                     state.disp.quiesce_workers();
+                    self.quiesce_inventory(&state);
                     match target {
                         Some(State::Halt) | Some(State::Destroy) => State::Halt,
                         Some(State::Reset) => State::Reset,

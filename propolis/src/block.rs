@@ -30,6 +30,7 @@ pub trait BlockReq: Send + Sync + 'static {
     fn offset(&self) -> usize;
     fn next_buf(&mut self) -> Option<GuestRegion>;
     fn complete(self, res: BlockResult, ctx: &DispCtx);
+    fn abort(self, ctx: &DispCtx);
 }
 
 #[derive(Debug)]
@@ -44,6 +45,7 @@ pub struct BlockInquiry {
 pub trait BlockDev<R: BlockReq>: Send + Sync + 'static {
     fn enqueue(&self, req: R);
     fn inquire(&self) -> BlockInquiry;
+    fn quiesce(&self, ctx: &DispCtx);
 }
 
 pub struct PlainBdev<R: BlockReq> {
@@ -88,11 +90,13 @@ impl<R: BlockReq> PlainBdev<R> {
         self.sectors = len / self.block_size;
     }
     fn process_loop(&self, ctx: &mut DispCtx) {
-        let mut reqs = self.reqs.lock().unwrap();
         loop {
             if ctx.check_yield() {
                 break;
             }
+
+            // Do not hold the requests lock across the yield check
+            let mut reqs = self.reqs.lock().unwrap();
 
             if let Some(mut req) = reqs.pop_front() {
                 let res = match req.oper() {
@@ -101,7 +105,7 @@ impl<R: BlockReq> PlainBdev<R> {
                 };
                 req.complete(res, ctx);
             } else {
-                reqs = self.cond.wait(reqs).unwrap();
+                let _ = self.cond.wait(reqs).unwrap();
             }
         }
     }
@@ -179,6 +183,13 @@ impl<R: BlockReq> BlockDev<R> for PlainBdev<R> {
             total_size: self.sectors as u64,
             block_size: self.block_size as u32,
             writable: !self.is_ro,
+        }
+    }
+
+    fn quiesce(&self, ctx: &DispCtx) {
+        let mut reqs = self.reqs.lock().unwrap();
+        for req in reqs.drain(..) {
+            req.abort(ctx);
         }
     }
 }
