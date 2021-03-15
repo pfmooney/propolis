@@ -2,7 +2,9 @@
 
 use std::sync::Mutex;
 
+use super::bits;
 use crate::common::*;
+use crate::dispatch::DispCtx;
 
 const MIN_SIZE: u32 = 2;
 const MAX_SIZE: u32 = 2 ^ 16;
@@ -33,19 +35,48 @@ impl QueueState {
         (self.head > 0 && self.tail == (self.head - 1))
             || (self.head == 0 && self.tail == (self.size - 1) as u16)
     }
+
+    /// Calculate a positive offset for a given index, wrapping at the size of
+    /// the queue.
+    fn wrap_add(&self, idx: u16, off: u16) -> u16 {
+        debug_assert!((idx as u32) < self.size);
+        debug_assert!((off as u32) < self.size);
+
+        let res = idx as u32 + off as u32;
+        if res >= self.size {
+            (res - self.size) as u16
+        } else {
+            res as u16
+        }
+    }
+    /// Calculate a negative offset for a given index, wrapping at the size of
+    /// the queue.
+    fn wrap_sub(&self, idx: u16, off: u16) -> u16 {
+        debug_assert!((idx as u32) < self.size);
+        debug_assert!((off as u32) < self.size);
+
+        if off > idx {
+            ((idx as u32 + self.size) - off as u32) as u16
+        } else {
+            idx - off
+        }
+    }
+
+    /// How many slots are empty between the tail and the head
+    fn avail_empty(&self) -> u16 {
+        self.wrap_sub(self.wrap_sub(self.head, 1), self.tail)
+    }
+    /// How many slots are occupied between the head and the tail
+    fn avail_occupied(&self) -> u16 {
+        self.wrap_sub(self.tail, self.head)
+    }
+
     fn push_tail(&mut self) -> Option<u16> {
         if self.is_full() {
             None
         } else {
             let result = Some(self.tail);
-
-            let next = self.tail as u32 + 1;
-            if next == self.size {
-                self.tail = 0;
-            } else {
-                self.tail = next as u16;
-            }
-
+            self.tail = self.wrap_add(self.tail, 1);
             result
         }
     }
@@ -54,22 +85,32 @@ impl QueueState {
             None
         } else {
             let result = Some(self.head);
-
-            let next = self.head as u32 + 1;
-            if next == self.size {
-                self.head = 0;
-            } else {
-                self.head = next as u16;
-            }
-
+            self.head = self.wrap_add(self.head, 1);
             result
         }
     }
-    fn produce_tail_to(&mut self, idx: u16) -> Result<(), &'static str> {
+
+    fn push_tail_to(&mut self, idx: u16) -> Result<(), &'static str> {
         if idx as u32 >= self.size {
             return Err("invalid index");
         }
-        todo!()
+        let push_count = self.wrap_sub(idx, self.tail);
+        if push_count > self.avail_empty() {
+            return Err("index too far");
+        }
+        self.tail = idx;
+        Ok(())
+    }
+    fn pop_head_to(&mut self, idx: u16) -> Result<(), &'static str> {
+        if idx as u32 >= self.size {
+            return Err("invalid index");
+        }
+        let pop_count = self.wrap_sub(idx, self.head);
+        if pop_count > self.avail_occupied() {
+            return Err("index too far");
+        }
+        self.head = idx;
+        Ok(())
     }
 }
 
@@ -78,14 +119,27 @@ pub struct SubQueue {
     base: GuestAddr,
 }
 impl SubQueue {
-    pub fn new(size: u32) -> Self {
-        Self {
-            state: Mutex::new(QueueState::new(size, 0, 0)),
-            // XXX: check addr
-            base: GuestAddr(0),
-        }
+    pub fn new(size: u32, base: GuestAddr) -> Self {
+        Self { state: Mutex::new(QueueState::new(size, 0, 0)), base }
     }
-    pub fn notify_tail(&self, idx: u16) {}
+    pub fn notify_tail(&self, idx: u16) -> Result<(), &'static str> {
+        let mut state = self.state.lock().unwrap();
+        state.push_tail_to(idx)
+    }
+    pub fn validate(base: GuestAddr, size: u32, ctx: &DispCtx) -> bool {
+        if (base.0 & PAGE_OFFSET as u64) != 0 {
+            return false;
+        }
+        if size < MIN_SIZE || size > MAX_SIZE {
+            return false;
+        }
+        let queue_size =
+            size as usize * std::mem::size_of::<bits::RawSubmission>();
+        let memctx = ctx.mctx.memctx();
+        let region = memctx.raw_readable(&GuestRegion(base, queue_size));
+
+        region.is_some()
+    }
 }
 
 pub struct CompQueue {
@@ -93,12 +147,25 @@ pub struct CompQueue {
     base: GuestAddr,
 }
 impl CompQueue {
-    pub fn new(size: u32) -> Self {
-        Self {
-            state: Mutex::new(QueueState::new(size, 0, 0)),
-            // XXX: check addr
-            base: GuestAddr(0),
-        }
+    pub fn new(size: u32, base: GuestAddr) -> Self {
+        Self { state: Mutex::new(QueueState::new(size, 0, 0)), base }
     }
-    pub fn notify_head(&self, idx: u16) {}
+    pub fn notify_head(&self, idx: u16) -> Result<(), &'static str> {
+        let mut state = self.state.lock().unwrap();
+        state.pop_head_to(idx)
+    }
+    pub fn validate(base: GuestAddr, size: u32, ctx: &DispCtx) -> bool {
+        if (base.0 & PAGE_OFFSET as u64) != 0 {
+            return false;
+        }
+        if size < MIN_SIZE || size > MAX_SIZE {
+            return false;
+        }
+        let queue_size =
+            size as usize * std::mem::size_of::<bits::RawSubmission>();
+        let memctx = ctx.mctx.memctx();
+        let region = memctx.raw_writable(&GuestRegion(base, queue_size));
+
+        region.is_some()
+    }
 }
