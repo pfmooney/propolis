@@ -12,7 +12,6 @@ mod queue;
 
 use bits::*;
 
-
 #[derive(Default)]
 struct CtrlState {
     enabled: bool,
@@ -29,13 +28,13 @@ struct NvmeState {
 }
 
 #[derive(Default)]
-struct PciNvme {
+pub struct PciNvme {
     state: Mutex<NvmeState>,
 }
 
 impl PciNvme {
     pub fn create(vendor: u16, device: u16) -> Arc<pci::DeviceInst> {
-        let mut builder = pci::Builder::new(pci::Ident {
+        let builder = pci::Builder::new(pci::Ident {
             vendor_id: vendor,
             device_id: device,
             sub_vendor_id: vendor,
@@ -92,7 +91,7 @@ impl PciNvme {
     }
 }
 impl PciNvme {
-    fn reg_ctrl_read(&self, id: &CtrlrReg, ro: &mut ReadOp, ctx: &DispCtx) {
+    fn reg_ctrl_read(&self, id: &CtrlrReg, ro: &mut ReadOp, _ctx: &DispCtx) {
         match id {
             CtrlrReg::CtrlrCaps => {
                 // MPSMIN = MPSMAX = 0 (4k pages)
@@ -154,7 +153,7 @@ impl PciNvme {
             }
         }
     }
-    fn reg_ctrl_write(&self, id: &CtrlrReg, wo: &mut WriteOp, ctx: &DispCtx) {
+    fn reg_ctrl_write(&self, id: &CtrlrReg, wo: &mut WriteOp, _ctx: &DispCtx) {
         match id {
             CtrlrReg::CtrlrCaps
             | CtrlrReg::Version
@@ -224,10 +223,6 @@ impl pci::Device for PciNvme {
         assert!(lintr_pin.is_none());
         assert!(msix_hdl.is_none());
     }
-
-    fn interrupt_mode_change(&self, mode: pci::IntrMode) {}
-
-    fn msi_update(&self, info: pci::MsiUpdate, ctx: &DispCtx) {}
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
