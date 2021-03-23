@@ -221,7 +221,7 @@ impl pci::Device for PciNvme {
         msix_hdl: Option<pci::MsixHdl>,
     ) {
         assert!(lintr_pin.is_none());
-        assert!(msix_hdl.is_none());
+        assert!(msix_hdl.is_some());
     }
 }
 
