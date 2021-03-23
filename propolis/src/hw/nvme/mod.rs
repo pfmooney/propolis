@@ -243,7 +243,7 @@ enum CtrlrReg {
     DoorBellCompQ0,
 }
 // XXX: single doorbell for prototype
-const CONTROLLER_REG_SZ: usize = 0x1000 + 8;
+const CONTROLLER_REG_SZ: usize = 0x2000;
 lazy_static! {
     static ref CONTROLLER_REGS: RegMap<CtrlrReg> = {
         let layout = [
@@ -263,6 +263,8 @@ lazy_static! {
             // XXX: hardcode a single doorbell with 0 stride for now
             (CtrlrReg::DoorBellSubQ0, 4),
             (CtrlrReg::DoorBellCompQ0, 4),
+            // XXX: pad out to next power of 2
+            (CtrlrReg::Reserved, 0x1000 - 8),
         ];
         RegMap::create_packed(
             CONTROLLER_REG_SZ,
