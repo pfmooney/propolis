@@ -201,6 +201,27 @@ fn main() {
                     .unwrap();
                     chipset.pci_attach(bdf.unwrap(), viona);
                 }
+                "pci-nvme" => {
+                    // let disk_path =
+                    //     dev.options.get("disk").unwrap().as_str().unwrap();
+
+                    // let plain: Arc<
+                    //     block::PlainBdev<hw::virtio::block::Request>,
+                    // > = block::PlainBdev::create(disk_path).unwrap();
+
+                    let nvme = hw::nvme::PciNvme::create(0x1de, 0x1000);
+                        // VirtioBlock::create(
+                        // 0x100,
+                        // Arc::clone(&plain)
+                        //     as Arc<
+                        //         dyn block::BlockDev<hw::virtio::block::Request>,
+                        //     >,
+                    // );
+                    chipset.pci_attach(bdf.unwrap(), nvme);
+
+                    // plain
+                    //     .start_dispatch(format!("bdev-{} thread", name), &disp);
+                }
                 _ => {
                     eprintln!("unrecognized driver: {}", name);
                     std::process::exit(libc::EXIT_FAILURE);
