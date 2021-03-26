@@ -37,6 +37,8 @@ impl SDT {
         oem_id: [u8; 6],
         oem_table: [u8; 8],
         oem_revision: u32,
+        creator_id: [u8; 4],
+        creator_revision: u32,
     ) -> Self {
         assert!(length >= 36);
 
@@ -48,8 +50,8 @@ impl SDT {
         data.extend_from_slice(&oem_id);
         data.extend_from_slice(&oem_table);
         data.extend_from_slice(&oem_revision.to_le_bytes());
-        data.extend_from_slice(b"CLDH");
-        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&creator_id);
+        data.extend_from_slice(&creator_revision.to_le_bytes());
         assert_eq!(data.len(), 36);
 
         data.resize(length as usize, 0);
@@ -121,7 +123,8 @@ mod tests {
 
     #[test]
     fn test_sdt() {
-        let mut sdt = SDT::new(*b"TEST", 40, 1, *b"CLOUDH", *b"TESTTEST", 1);
+        let mut sdt =
+            SDT::new(*b"TEST", 40, 1, *b"CLOUDH", *b"TESTTEST", 1, *b"CLDH", 0);
         let sum: u8 =
             sdt.as_slice().iter().fold(0u8, |acc, x| acc.wrapping_add(*x));
         assert_eq!(sum, 0);
