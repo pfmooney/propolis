@@ -32,19 +32,20 @@ pub struct SDT {
 impl SDT {
     pub fn new(
         signature: [u8; 4],
-        length: u32,
         revision: u8,
         oem_id: [u8; 6],
         oem_table: [u8; 8],
         oem_revision: u32,
         creator_id: [u8; 4],
         creator_revision: u32,
+        data_capacity: Option<u32>,
     ) -> Self {
-        assert!(length >= 36);
-
-        let mut data = Vec::with_capacity(length as usize);
+        const HEADER_LEN: usize = 36;
+        let mut data = Vec::with_capacity(
+            HEADER_LEN + data_capacity.unwrap_or(0) as usize,
+        );
         data.extend_from_slice(&signature);
-        data.extend_from_slice(&length.to_le_bytes());
+        data.extend_from_slice(&(HEADER_LEN as u32).to_le_bytes());
         data.push(revision);
         data.push(0); // checksum
         data.extend_from_slice(&oem_id);
@@ -52,9 +53,8 @@ impl SDT {
         data.extend_from_slice(&oem_revision.to_le_bytes());
         data.extend_from_slice(&creator_id);
         data.extend_from_slice(&creator_revision.to_le_bytes());
-        assert_eq!(data.len(), 36);
+        assert_eq!(data.len(), HEADER_LEN);
 
-        data.resize(length as usize, 0);
         let mut sdt = SDT { data };
 
         sdt.update_checksum();
@@ -123,12 +123,20 @@ mod tests {
 
     #[test]
     fn test_sdt() {
-        let mut sdt =
-            SDT::new(*b"TEST", 40, 1, *b"CLOUDH", *b"TESTTEST", 1, *b"CLDH", 0);
+        let mut sdt = SDT::new(
+            *b"TEST",
+            1,
+            *b"CLOUDH",
+            *b"TESTTEST",
+            1,
+            *b"CLDH",
+            0,
+            Some(4),
+        );
         let sum: u8 =
             sdt.as_slice().iter().fold(0u8, |acc, x| acc.wrapping_add(*x));
         assert_eq!(sum, 0);
-        sdt.write_u32(36, 0x12345678);
+        sdt.append(0x12345678u32);
         let sum: u8 =
             sdt.as_slice().iter().fold(0u8, |acc, x| acc.wrapping_add(*x));
         assert_eq!(sum, 0);

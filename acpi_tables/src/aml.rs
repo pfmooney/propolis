@@ -96,6 +96,21 @@ impl From<&str> for Path {
     }
 }
 
+pub trait AsPath {
+    fn as_path(self) -> Path;
+}
+
+impl AsPath for Path {
+    fn as_path(self) -> Path {
+        self
+    }
+}
+impl AsPath for &str {
+    fn as_path(self) -> Path {
+        Path::new(self)
+    }
+}
+
 pub type Byte = u8;
 
 impl Aml for Byte {
@@ -156,8 +171,8 @@ impl<T: Aml> Aml for Name<T> {
 }
 
 impl<T: Aml> Name<T> {
-    pub fn new(path: Path, inner: T) -> Self {
-        Self { path, inner }
+    pub fn new(path: impl AsPath, inner: T) -> Self {
+        Self { path: path.as_path(), inner }
     }
 }
 
@@ -585,7 +600,7 @@ impl Aml for Interrupt {
 
 pub struct Device {
     path: Path,
-    children: Vec<Box<dyn Aml>>,
+    pub children: Vec<Box<dyn Aml>>,
 }
 
 impl Aml for Device {
@@ -609,17 +624,17 @@ impl Aml for Device {
 }
 
 impl Device {
-    pub fn new(path: Path, children: Vec<Box<dyn Aml>>) -> Self {
-        Device { path, children }
+    pub fn new(path: impl AsPath, children: Vec<Box<dyn Aml>>) -> Self {
+        Device { path: path.as_path(), children }
     }
 }
 
-pub struct Scope<'a> {
+pub struct Scope {
     path: Path,
-    children: Vec<&'a dyn Aml>,
+    pub children: Vec<Box<dyn Aml>>,
 }
 
-impl<'a> Aml for Scope<'a> {
+impl Aml for Scope {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.append(&mut self.path.to_aml_bytes());
@@ -638,9 +653,9 @@ impl<'a> Aml for Scope<'a> {
     }
 }
 
-impl<'a> Scope<'a> {
-    pub fn new(path: Path, children: Vec<&'a dyn Aml>) -> Self {
-        Scope { path, children }
+impl Scope {
+    pub fn new(path: impl AsPath, children: Vec<Box<dyn Aml>>) -> Self {
+        Scope { path: path.as_path(), children }
     }
 }
 
@@ -648,17 +663,17 @@ pub struct Method {
     path: Path,
     args: u8,
     serialized: bool,
-    children: Vec<Box<dyn Aml>>,
+    pub children: Vec<Box<dyn Aml>>,
 }
 
 impl Method {
     pub fn new(
-        path: Path,
+        path: impl AsPath,
         args: u8,
         serialized: bool,
         children: Vec<Box<dyn Aml>>,
     ) -> Self {
-        Method { path, children, args, serialized }
+        Method { path: path.as_path(), children, args, serialized }
     }
 }
 
@@ -726,7 +741,6 @@ pub enum FieldEntry {
 
 pub struct Field {
     path: Path,
-
     fields: Vec<FieldEntry>,
     access_type: FieldAccessType,
     update_rule: FieldUpdateRule,
@@ -734,12 +748,12 @@ pub struct Field {
 
 impl Field {
     pub fn new(
-        path: Path,
+        path: impl AsPath,
         access_type: FieldAccessType,
         update_rule: FieldUpdateRule,
         fields: Vec<FieldEntry>,
     ) -> Self {
-        Field { path, access_type, update_rule, fields }
+        Field { path: path.as_path(), access_type, update_rule, fields }
     }
 }
 
@@ -829,12 +843,12 @@ impl Aml for OpRegion {
 
 pub struct If<T: Aml> {
     predicate: T,
-    if_children: Vec<Box<dyn Aml>>,
+    pub children: Vec<Box<dyn Aml>>,
 }
 
 impl<T: Aml> If<T> {
-    pub fn new(predicate: T, if_children: Vec<Box<dyn Aml>>) -> Self {
-        If { predicate, if_children }
+    pub fn new(predicate: T, children: Vec<Box<dyn Aml>>) -> Self {
+        If { predicate, children }
     }
 }
 
@@ -842,7 +856,7 @@ impl<T: Aml> Aml for If<T> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.predicate.to_aml_bytes());
-        for child in self.if_children.iter() {
+        for child in self.children.iter() {
             bytes.extend_from_slice(&child.to_aml_bytes());
         }
 
@@ -1029,12 +1043,12 @@ impl<O: Aml, V: Aml> Aml for Notify<O, V> {
 
 pub struct While<P: Aml> {
     predicate: P,
-    while_children: Vec<Box<dyn Aml>>,
+    pub children: Vec<Box<dyn Aml>>,
 }
 
 impl<P: Aml> While<P> {
-    pub fn new(predicate: P, while_children: Vec<Box<dyn Aml>>) -> Self {
-        While { predicate, while_children }
+    pub fn new(predicate: P, children: Vec<Box<dyn Aml>>) -> Self {
+        While { predicate, children }
     }
 }
 
@@ -1042,7 +1056,7 @@ impl<P: Aml> Aml for While<P> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.predicate.to_aml_bytes());
-        for child in self.while_children.iter() {
+        for child in self.children.iter() {
             bytes.extend_from_slice(&child.to_aml_bytes());
         }
 
@@ -1241,11 +1255,11 @@ mod tests {
         ];
         assert_eq!(
             Device::new(
-                "_SB_.COM1".into(),
+                "_SB_.COM1",
                 vec![
-                    Name::new("_HID".into(), EISAName::new("PNP0501")).into(),
+                    Name::new("_HID", EISAName::new("PNP0501")).into(),
                     Name::new(
-                        "_CRS".into(),
+                        "_CRS",
                         ResourceTemplate::new(vec![
                             Interrupt::new(true, true, false, false, 4).into(),
                             IO::new(0x3f8, 0x3f8, 0, 0x8).into(),
@@ -1283,16 +1297,17 @@ mod tests {
 
         assert_eq!(
             Scope::new(
-                "_SB_.MBRD".into(),
-                vec![&Name::new(
-                    "_CRS".into(),
+                "_SB_.MBRD",
+                vec![Name::new(
+                    "_CRS",
                     ResourceTemplate::new(vec![Memory32Fixed::new(
                         true,
                         0xE800_0000,
                         0x1000_0000
                     )
                     .into()])
-                )]
+                )
+                .into()]
             )
             .to_aml_bytes(),
             &mbrd_scope[..]
@@ -1318,7 +1333,7 @@ mod tests {
 
         assert_eq!(
             Name::new(
-                "_CRS".into(),
+                "_CRS",
                 ResourceTemplate::new(vec![Memory32Fixed::new(
                     true,
                     0xE800_0000,
@@ -1387,7 +1402,7 @@ mod tests {
 
         assert_eq!(
             Name::new(
-                "_CRS".into(),
+                "_CRS",
                 ResourceTemplate::new(vec![AddressSpace::new_bus_number(
                     0x0u16, 0xffu16
                 )
@@ -1407,7 +1422,7 @@ mod tests {
 
         assert_eq!(
             Name::new(
-                "_CRS".into(),
+                "_CRS",
                 ResourceTemplate::new(vec![
                     AddressSpace::new_io(0x0u16, 0xcf7u16).into(),
                     AddressSpace::new_io(0xd00u16, 0xffffu16).into(),
@@ -1429,7 +1444,7 @@ mod tests {
 
         assert_eq!(
             Name::new(
-                "_CRS".into(),
+                "_CRS",
                 ResourceTemplate::new(vec![
                     AddressSpace::new_memory(
                         AddressSpaceCachable::Cacheable,
@@ -1463,7 +1478,7 @@ mod tests {
 
         assert_eq!(
             Name::new(
-                "_CRS".into(),
+                "_CRS",
                 ResourceTemplate::new(vec![AddressSpace::new_memory(
                     AddressSpaceCachable::Cacheable,
                     true,
@@ -1500,7 +1515,7 @@ mod tests {
 
         assert_eq!(
             Name::new(
-                "_CRS".into(),
+                "_CRS",
                 ResourceTemplate::new(vec![
                     Interrupt::new(true, true, false, false, 4).into(),
                     IO::new(0x3f8, 0x3f8, 0, 0x8).into(),
@@ -1539,7 +1554,7 @@ mod tests {
         let s5_sleep_data =
             [0x08, 0x5F, 0x53, 0x35, 0x5F, 0x12, 0x04, 0x01, 0x0A, 0x05];
 
-        let s5 = Name::new("_S5_".into(), Package::new(vec![5u8.into()]));
+        let s5 = Name::new("_S5_", Package::new(vec![5u8.into()]));
 
         assert_eq!(s5_sleep_data.to_vec(), s5.to_aml_bytes());
     }
@@ -1547,7 +1562,7 @@ mod tests {
     #[test]
     fn test_eisa_name() {
         assert_eq!(
-            Name::new("_HID".into(), EISAName::new("PNP0501")).to_aml_bytes(),
+            Name::new("_HID", EISAName::new("PNP0501")).to_aml_bytes(),
             [0x08, 0x5F, 0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x05, 0x01],
         )
     }
@@ -1588,7 +1603,7 @@ mod tests {
     #[test]
     fn test_name() {
         assert_eq!(
-            Name::new("_SB_.PCI0._UID".into(), 0x1234u16).to_aml_bytes(),
+            Name::new("_SB_.PCI0._UID", 0x1234u16).to_aml_bytes(),
             [
                 0x08, /* NameOp */
                 0x2F, /* MultiNamePrefix */
@@ -1617,13 +1632,8 @@ mod tests {
     #[test]
     fn test_method() {
         assert_eq!(
-            Method::new(
-                "_STA".into(),
-                0,
-                false,
-                vec![Return::new(0xfu8).into()]
-            )
-            .to_aml_bytes(),
+            Method::new("_STA", 0, false, vec![Return::new(0xfu8).into()])
+                .to_aml_bytes(),
             [0x14, 0x09, 0x5F, 0x53, 0x54, 0x41, 0x00, 0xA4, 0x0A, 0x0F]
         );
     }
@@ -1653,7 +1663,7 @@ mod tests {
 
         assert_eq!(
             Field::new(
-                "PRST".into(),
+                "PRST",
                 FieldAccessType::Byte,
                 FieldUpdateRule::WriteAsZeroes,
                 vec![
@@ -1686,7 +1696,7 @@ mod tests {
 
         assert_eq!(
             Field::new(
-                "PRST".into(),
+                "PRST",
                 FieldAccessType::DWord,
                 FieldUpdateRule::Preserve,
                 vec![
@@ -1734,7 +1744,7 @@ mod tests {
 
         assert_eq!(
             Method::new(
-                "TEST".into(),
+                "TEST",
                 1,
                 false,
                 vec![
@@ -1768,7 +1778,7 @@ mod tests {
         ];
         assert_eq!(
             Method::new(
-                "TEST".into(),
+                "TEST",
                 0,
                 false,
                 vec![
@@ -1812,12 +1822,12 @@ mod tests {
 
         assert_eq!(
             Device::new(
-                "_SB_.MHPC".into(),
+                "_SB_.MHPC",
                 vec![
-                    Name::new("_HID".into(), EISAName::new("PNP0A06")).into(),
+                    Name::new("_HID", EISAName::new("PNP0A06")).into(),
                     Mutex::new("MLCK".into(), 0).into(),
                     Method::new(
-                        "TEST".into(),
+                        "TEST",
                         0,
                         false,
                         vec![
@@ -1855,11 +1865,11 @@ mod tests {
 
         assert_eq!(
             Device::new(
-                "_SB_.MHPC".into(),
+                "_SB_.MHPC",
                 vec![
-                    Name::new("_HID".into(), EISAName::new("PNP0A06")).into(),
+                    Name::new("_HID", EISAName::new("PNP0A06")).into(),
                     Method::new(
-                        "TEST".into(),
+                        "TEST",
                         0,
                         false,
                         vec![Notify::new(Path::new("MHPC"), ONE).into(),]
@@ -1898,11 +1908,11 @@ mod tests {
 
         assert_eq!(
             Device::new(
-                "_SB_.MHPC".into(),
+                "_SB_.MHPC",
                 vec![
-                    Name::new("_HID".into(), EISAName::new("PNP0A06")).into(),
+                    Name::new("_HID", EISAName::new("PNP0A06")).into(),
                     Method::new(
-                        "TEST".into(),
+                        "TEST",
                         0,
                         false,
                         vec![
@@ -1944,7 +1954,7 @@ mod tests {
         let mut methods = Vec::new();
         methods.extend_from_slice(
             &Method::new(
-                "TST1".into(),
+                "TST1",
                 1,
                 false,
                 vec![MethodCall::new(
@@ -1957,7 +1967,7 @@ mod tests {
         );
         methods.extend_from_slice(
             &Method::new(
-                "TST2".into(),
+                "TST2",
                 2,
                 false,
                 vec![MethodCall::new("TST1".into(), vec![ONE.into()]).into()],
@@ -1982,7 +1992,7 @@ mod tests {
 
         assert_eq!(
             Name::new(
-                "_MAT".into(),
+                "_MAT",
                 Buffer::new(vec![
                     0x00, 0x08, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00
                 ])
@@ -2026,12 +2036,12 @@ mod tests {
 
         assert_eq!(
             Method::new(
-                "MCRS".into(),
+                "MCRS",
                 0,
                 true,
                 vec![
                     Name::new(
-                        "MR64".into(),
+                        "MR64",
                         ResourceTemplate::new(vec![AddressSpace::new_memory(
                             AddressSpaceCachable::Cacheable,
                             true,
