@@ -1,12 +1,17 @@
 // Copyright © 2019 Intel Corporation
+// Copyright 2021 Oxide Computer Company
 //
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use std::marker::PhantomData;
-
 pub trait Aml {
     fn to_aml_bytes(&self) -> Vec<u8>;
+}
+
+impl<T: Aml + 'static> From<T> for Box<dyn Aml> {
+    fn from(inp: T) -> Self {
+        Box::new(inp)
+    }
 }
 
 pub const ZERO: Zero = Zero {};
@@ -135,31 +140,32 @@ impl Aml for QWord {
     }
 }
 
-pub struct Name {
-    bytes: Vec<u8>,
+pub struct Name<T: Aml> {
+    path: Path,
+    inner: T,
 }
 
-impl Aml for Name {
+impl<T: Aml> Aml for Name<T> {
     fn to_aml_bytes(&self) -> Vec<u8> {
-        self.bytes.clone()
-    }
-}
-
-impl Name {
-    pub fn new(path: Path, inner: &dyn Aml) -> Self {
         let mut bytes = Vec::new();
         bytes.push(0x08); /* NameOp */
-        bytes.append(&mut path.to_aml_bytes());
-        bytes.append(&mut inner.to_aml_bytes());
-        Name { bytes }
+        bytes.append(&mut self.path.to_aml_bytes());
+        bytes.append(&mut self.inner.to_aml_bytes());
+        bytes
     }
 }
 
-pub struct Package<'a> {
-    children: Vec<&'a dyn Aml>,
+impl<T: Aml> Name<T> {
+    pub fn new(path: Path, inner: T) -> Self {
+        Self { path, inner }
+    }
 }
 
-impl<'a> Aml for Package<'a> {
+pub struct Package {
+    pub children: Vec<Box<dyn Aml>>,
+}
+
+impl Aml for Package {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.push(self.children.len() as u8);
@@ -179,8 +185,8 @@ impl<'a> Aml for Package<'a> {
     }
 }
 
-impl<'a> Package<'a> {
-    pub fn new(children: Vec<&'a dyn Aml>) -> Self {
+impl Package {
+    pub fn new(children: Vec<Box<dyn Aml>>) -> Self {
         Package { children }
     }
 }
@@ -312,11 +318,11 @@ impl Aml for AmlString {
     }
 }
 
-pub struct ResourceTemplate<'a> {
-    children: Vec<&'a dyn Aml>,
+pub struct ResourceTemplate {
+    pub children: Vec<Box<dyn Aml>>,
 }
 
-impl<'a> Aml for ResourceTemplate<'a> {
+impl Aml for ResourceTemplate {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
@@ -350,8 +356,8 @@ impl<'a> Aml for ResourceTemplate<'a> {
     }
 }
 
-impl<'a> ResourceTemplate<'a> {
-    pub fn new(children: Vec<&'a dyn Aml>) -> Self {
+impl ResourceTemplate {
+    pub fn new(children: Vec<Box<dyn Aml>>) -> Self {
         ResourceTemplate { children }
     }
 }
@@ -364,11 +370,7 @@ pub struct Memory32Fixed {
 
 impl Memory32Fixed {
     pub fn new(read_write: bool, base: u32, length: u32) -> Self {
-        Memory32Fixed {
-            read_write,
-            base,
-            length,
-        }
+        Memory32Fixed { read_write, base, length }
     }
 }
 
@@ -410,7 +412,12 @@ pub struct AddressSpace<T> {
 }
 
 impl<T> AddressSpace<T> {
-    pub fn new_memory(cacheable: AddressSpaceCachable, read_write: bool, min: T, max: T) -> Self {
+    pub fn new_memory(
+        cacheable: AddressSpaceCachable,
+        read_write: bool,
+        min: T,
+        max: T,
+    ) -> Self {
         AddressSpace {
             r#type: AddressSpaceType::Memory,
             min,
@@ -519,12 +526,7 @@ pub struct IO {
 
 impl IO {
     pub fn new(min: u16, max: u16, alignment: u8, length: u8) -> Self {
-        IO {
-            min,
-            max,
-            alignment,
-            length,
-        }
+        IO { min, max, alignment, length }
     }
 }
 
@@ -559,13 +561,7 @@ impl Interrupt {
         shared: bool,
         number: u32,
     ) -> Self {
-        Interrupt {
-            consumer,
-            edge_triggered,
-            active_low,
-            shared,
-            number,
-        }
+        Interrupt { consumer, edge_triggered, active_low, shared, number }
     }
 }
 
@@ -587,12 +583,12 @@ impl Aml for Interrupt {
     }
 }
 
-pub struct Device<'a> {
+pub struct Device {
     path: Path,
-    children: Vec<&'a dyn Aml>,
+    children: Vec<Box<dyn Aml>>,
 }
 
-impl<'a> Aml for Device<'a> {
+impl Aml for Device {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.append(&mut self.path.to_aml_bytes());
@@ -612,8 +608,8 @@ impl<'a> Aml for Device<'a> {
     }
 }
 
-impl<'a> Device<'a> {
-    pub fn new(path: Path, children: Vec<&'a dyn Aml>) -> Self {
+impl Device {
+    pub fn new(path: Path, children: Vec<Box<dyn Aml>>) -> Self {
         Device { path, children }
     }
 }
@@ -648,25 +644,25 @@ impl<'a> Scope<'a> {
     }
 }
 
-pub struct Method<'a> {
+pub struct Method {
     path: Path,
-    children: Vec<&'a dyn Aml>,
     args: u8,
     serialized: bool,
+    children: Vec<Box<dyn Aml>>,
 }
 
-impl<'a> Method<'a> {
-    pub fn new(path: Path, args: u8, serialized: bool, children: Vec<&'a dyn Aml>) -> Self {
-        Method {
-            path,
-            children,
-            args,
-            serialized,
-        }
+impl Method {
+    pub fn new(
+        path: Path,
+        args: u8,
+        serialized: bool,
+        children: Vec<Box<dyn Aml>>,
+    ) -> Self {
+        Method { path, children, args, serialized }
     }
 }
 
-impl<'a> Aml for Method<'a> {
+impl Aml for Method {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.append(&mut self.path.to_aml_bytes());
@@ -687,17 +683,17 @@ impl<'a> Aml for Method<'a> {
     }
 }
 
-pub struct Return<'a> {
-    value: &'a dyn Aml,
+pub struct Return<T: Aml> {
+    value: T,
 }
 
-impl<'a> Return<'a> {
-    pub fn new(value: &'a dyn Aml) -> Self {
+impl<T: Aml> Return<T> {
+    pub fn new(value: T) -> Self {
         Return { value }
     }
 }
 
-impl<'a> Aml for Return<'a> {
+impl<T: Aml> Aml for Return<T> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.push(0xa4); /* ReturnOp */
@@ -743,12 +739,7 @@ impl Field {
         update_rule: FieldUpdateRule,
         fields: Vec<FieldEntry>,
     ) -> Self {
-        Field {
-            path,
-            access_type,
-            update_rule,
-            fields,
-        }
+        Field { path, access_type, update_rule, fields }
     }
 }
 
@@ -764,11 +755,17 @@ impl Aml for Field {
             match field {
                 FieldEntry::Named(name, length) => {
                     bytes.extend_from_slice(name);
-                    bytes.append(&mut create_pkg_length(&vec![0; *length], false));
+                    bytes.append(&mut create_pkg_length(
+                        &vec![0; *length],
+                        false,
+                    ));
                 }
                 FieldEntry::Reserved(length) => {
                     bytes.push(0x0);
-                    bytes.append(&mut create_pkg_length(&vec![0; *length], false));
+                    bytes.append(&mut create_pkg_length(
+                        &vec![0; *length],
+                        false,
+                    ));
                 }
             }
         }
@@ -807,13 +804,13 @@ pub struct OpRegion {
 }
 
 impl OpRegion {
-    pub fn new(path: Path, space: OpRegionSpace, offset: usize, length: usize) -> Self {
-        OpRegion {
-            path,
-            space,
-            offset,
-            length,
-        }
+    pub fn new(
+        path: Path,
+        space: OpRegionSpace,
+        offset: usize,
+        length: usize,
+    ) -> Self {
+        OpRegion { path, space, offset, length }
     }
 }
 
@@ -830,21 +827,18 @@ impl Aml for OpRegion {
     }
 }
 
-pub struct If<'a> {
-    predicate: &'a dyn Aml,
-    if_children: Vec<&'a dyn Aml>,
+pub struct If<T: Aml> {
+    predicate: T,
+    if_children: Vec<Box<dyn Aml>>,
 }
 
-impl<'a> If<'a> {
-    pub fn new(predicate: &'a dyn Aml, if_children: Vec<&'a dyn Aml>) -> Self {
-        If {
-            predicate,
-            if_children,
-        }
+impl<T: Aml> If<T> {
+    pub fn new(predicate: T, if_children: Vec<Box<dyn Aml>>) -> Self {
+        If { predicate, if_children }
     }
 }
 
-impl<'a> Aml for If<'a> {
+impl<T: Aml> Aml for If<T> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.predicate.to_aml_bytes());
@@ -863,18 +857,18 @@ impl<'a> Aml for If<'a> {
     }
 }
 
-pub struct Equal<'a> {
-    right: &'a dyn Aml,
-    left: &'a dyn Aml,
+pub struct Equal<L: Aml, R: Aml> {
+    left: L,
+    right: R,
 }
 
-impl<'a> Equal<'a> {
-    pub fn new(left: &'a dyn Aml, right: &'a dyn Aml) -> Self {
+impl<L: Aml, R: Aml> Equal<L, R> {
+    pub fn new(left: L, right: R) -> Self {
         Equal { left, right }
     }
 }
 
-impl<'a> Aml for Equal<'a> {
+impl<L: Aml, R: Aml> Aml for Equal<L, R> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.push(0x93); /* LEqualOp */
@@ -884,18 +878,18 @@ impl<'a> Aml for Equal<'a> {
     }
 }
 
-pub struct LessThan<'a> {
-    right: &'a dyn Aml,
-    left: &'a dyn Aml,
+pub struct LessThan<L: Aml, R: Aml> {
+    left: L,
+    right: R,
 }
 
-impl<'a> LessThan<'a> {
-    pub fn new(left: &'a dyn Aml, right: &'a dyn Aml) -> Self {
+impl<L: Aml, R: Aml> LessThan<L, R> {
+    pub fn new(left: L, right: R) -> Self {
         LessThan { left, right }
     }
 }
 
-impl<'a> Aml for LessThan<'a> {
+impl<L: Aml, R: Aml> Aml for LessThan<L, R> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.push(0x95); /* LLessOp */
@@ -927,18 +921,18 @@ impl Aml for Local {
     }
 }
 
-pub struct Store<'a> {
-    name: &'a dyn Aml,
-    value: &'a dyn Aml,
+pub struct Store<N: Aml, V: Aml> {
+    name: N,
+    value: V,
 }
 
-impl<'a> Store<'a> {
-    pub fn new(name: &'a dyn Aml, value: &'a dyn Aml) -> Self {
+impl<N: Aml, V: Aml> Store<N, V> {
+    pub fn new(name: N, value: V) -> Self {
         Store { name, value }
     }
 }
 
-impl<'a> Aml for Store<'a> {
+impl<N: Aml, V: Aml> Aml for Store<N, V> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.push(0x70); /* StoreOp */
@@ -1012,18 +1006,18 @@ impl Aml for Release {
     }
 }
 
-pub struct Notify<'a> {
-    object: &'a dyn Aml,
-    value: &'a dyn Aml,
+pub struct Notify<O: Aml, V: Aml> {
+    object: O,
+    value: V,
 }
 
-impl<'a> Notify<'a> {
-    pub fn new(object: &'a dyn Aml, value: &'a dyn Aml) -> Self {
+impl<O: Aml, V: Aml> Notify<O, V> {
+    pub fn new(object: O, value: V) -> Self {
         Notify { object, value }
     }
 }
 
-impl<'a> Aml for Notify<'a> {
+impl<O: Aml, V: Aml> Aml for Notify<O, V> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.push(0x86); /* NotifyOp */
@@ -1033,21 +1027,18 @@ impl<'a> Aml for Notify<'a> {
     }
 }
 
-pub struct While<'a> {
-    predicate: &'a dyn Aml,
-    while_children: Vec<&'a dyn Aml>,
+pub struct While<P: Aml> {
+    predicate: P,
+    while_children: Vec<Box<dyn Aml>>,
 }
 
-impl<'a> While<'a> {
-    pub fn new(predicate: &'a dyn Aml, while_children: Vec<&'a dyn Aml>) -> Self {
-        While {
-            predicate,
-            while_children,
-        }
+impl<P: Aml> While<P> {
+    pub fn new(predicate: P, while_children: Vec<Box<dyn Aml>>) -> Self {
+        While { predicate, while_children }
     }
 }
 
-impl<'a> Aml for While<'a> {
+impl<P: Aml> Aml for While<P> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.predicate.to_aml_bytes());
@@ -1068,19 +1059,19 @@ impl<'a> Aml for While<'a> {
 
 macro_rules! binary_op {
     ($name:ident, $opcode:expr) => {
-        pub struct $name<'a> {
-            a: &'a dyn Aml,
-            b: &'a dyn Aml,
-            target: &'a dyn Aml,
+        pub struct $name<A: Aml, B: Aml, T: Aml> {
+            a: A,
+            b: B,
+            target: T,
         }
 
-        impl<'a> $name<'a> {
-            pub fn new(target: &'a dyn Aml, a: &'a dyn Aml, b: &'a dyn Aml) -> Self {
+        impl<A: Aml, B: Aml, T: Aml> $name<A, B, T> {
+            pub fn new(target: T, a: A, b: B) -> Self {
                 $name { target, a, b }
             }
         }
 
-        impl<'a> Aml for $name<'a> {
+        impl<A: Aml, B: Aml, T: Aml> Aml for $name<A, B, T> {
             fn to_aml_bytes(&self) -> Vec<u8> {
                 let mut bytes = Vec::new();
                 bytes.push($opcode); /* Op for the binary operator */
@@ -1110,18 +1101,18 @@ binary_op!(Mod, 0x85);
 binary_op!(Index, 0x88);
 binary_op!(ToString, 0x9C);
 
-pub struct MethodCall<'a> {
+pub struct MethodCall {
     name: Path,
-    args: Vec<&'a dyn Aml>,
+    args: Vec<Box<dyn Aml>>,
 }
 
-impl<'a> MethodCall<'a> {
-    pub fn new(name: Path, args: Vec<&'a dyn Aml>) -> Self {
+impl MethodCall {
+    pub fn new(name: Path, args: Vec<Box<dyn Aml>>) -> Self {
         MethodCall { name, args }
     }
 }
 
-impl<'a> Aml for MethodCall<'a> {
+impl Aml for MethodCall {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.name.to_aml_bytes());
@@ -1160,39 +1151,55 @@ impl Aml for Buffer {
     }
 }
 
-pub struct CreateField<'a, T> {
-    buffer: &'a dyn Aml,
-    offset: &'a dyn Aml,
-    field: Path,
-    phantom: PhantomData<&'a T>,
+pub struct CreateQWordField<B: Aml, O: Aml> {
+    inner: CreateField<B, O>,
 }
-
-impl<'a, T> CreateField<'a, T> {
-    pub fn new(buffer: &'a dyn Aml, offset: &'a dyn Aml, field: Path) -> Self {
-        CreateField::<T> {
-            buffer,
-            offset,
-            field,
-            phantom: PhantomData::default(),
+impl<B: Aml, O: Aml> CreateQWordField<B, O> {
+    pub fn new(buffer: B, offset: O, field: Path) -> Self {
+        Self {
+            inner: CreateField { width: Width::QWord, buffer, offset, field },
         }
     }
 }
-
-impl<'a> Aml for CreateField<'a, u64> {
+impl<B: Aml, O: Aml> Aml for CreateQWordField<B, O> {
     fn to_aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x8f); /* CreateQWordFieldOp */
-        bytes.extend_from_slice(&self.buffer.to_aml_bytes());
-        bytes.extend_from_slice(&self.offset.to_aml_bytes());
-        bytes.extend_from_slice(&self.field.to_aml_bytes());
-        bytes
+        self.inner.to_aml_bytes()
+    }
+}
+pub struct CreateDWordField<B: Aml, O: Aml> {
+    inner: CreateField<B, O>,
+}
+impl<B: Aml, O: Aml> CreateDWordField<B, O> {
+    pub fn new(buffer: B, offset: O, field: Path) -> Self {
+        Self {
+            inner: CreateField { width: Width::DWord, buffer, offset, field },
+        }
+    }
+}
+impl<B: Aml, O: Aml> Aml for CreateDWordField<B, O> {
+    fn to_aml_bytes(&self) -> Vec<u8> {
+        self.inner.to_aml_bytes()
     }
 }
 
-impl<'a> Aml for CreateField<'a, u32> {
+enum Width {
+    QWord,
+    DWord,
+}
+struct CreateField<B: Aml, O: Aml> {
+    width: Width,
+    buffer: B,
+    offset: O,
+    field: Path,
+}
+
+impl<B: Aml, O: Aml> Aml for CreateField<B, O> {
     fn to_aml_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.push(0x8a); /* CreateDWordFieldOp */
+        match self.width {
+            Width::QWord => bytes.push(0x8f), /* CreateQWordFieldOp */
+            Width::DWord => bytes.push(0x8a), /* CreateDWordFieldOp */
+        }
         bytes.extend_from_slice(&self.buffer.to_aml_bytes());
         bytes.extend_from_slice(&self.offset.to_aml_bytes());
         bytes.extend_from_slice(&self.field.to_aml_bytes());
@@ -1226,23 +1233,25 @@ mod tests {
         }
             */
         let com1_device = [
-            0x5B, 0x82, 0x30, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x43, 0x4F, 0x4D, 0x31, 0x08, 0x5F,
-            0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x05, 0x01, 0x08, 0x5F, 0x43, 0x52, 0x53, 0x11,
-            0x16, 0x0A, 0x13, 0x89, 0x06, 0x00, 0x03, 0x01, 0x04, 0x00, 0x00, 0x00, 0x47, 0x01,
-            0xF8, 0x03, 0xF8, 0x03, 0x00, 0x08, 0x79, 0x00,
+            0x5B, 0x82, 0x30, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x43, 0x4F, 0x4D,
+            0x31, 0x08, 0x5F, 0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x05, 0x01,
+            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x16, 0x0A, 0x13, 0x89, 0x06,
+            0x00, 0x03, 0x01, 0x04, 0x00, 0x00, 0x00, 0x47, 0x01, 0xF8, 0x03,
+            0xF8, 0x03, 0x00, 0x08, 0x79, 0x00,
         ];
         assert_eq!(
             Device::new(
                 "_SB_.COM1".into(),
                 vec![
-                    &Name::new("_HID".into(), &EISAName::new("PNP0501")),
-                    &Name::new(
+                    Name::new("_HID".into(), EISAName::new("PNP0501")).into(),
+                    Name::new(
                         "_CRS".into(),
-                        &ResourceTemplate::new(vec![
-                            &Interrupt::new(true, true, false, false, 4),
-                            &IO::new(0x3f8, 0x3f8, 0, 0x8)
+                        ResourceTemplate::new(vec![
+                            Interrupt::new(true, true, false, false, 4).into(),
+                            IO::new(0x3f8, 0x3f8, 0, 0x8).into(),
                         ])
                     )
+                    .into(),
                 ]
             )
             .to_aml_bytes(),
@@ -1266,9 +1275,10 @@ mod tests {
         */
 
         let mbrd_scope = [
-            0x10, 0x21, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x4D, 0x42, 0x52, 0x44, 0x08, 0x5F, 0x43,
-            0x52, 0x53, 0x11, 0x11, 0x0A, 0x0E, 0x86, 0x09, 0x00, 0x01, 0x00, 0x00, 0x00, 0xE8,
-            0x00, 0x00, 0x00, 0x10, 0x79, 0x00,
+            0x10, 0x21, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x4D, 0x42, 0x52, 0x44,
+            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x11, 0x0A, 0x0E, 0x86, 0x09,
+            0x00, 0x01, 0x00, 0x00, 0x00, 0xE8, 0x00, 0x00, 0x00, 0x10, 0x79,
+            0x00,
         ];
 
         assert_eq!(
@@ -1276,11 +1286,12 @@ mod tests {
                 "_SB_.MBRD".into(),
                 vec![&Name::new(
                     "_CRS".into(),
-                    &ResourceTemplate::new(vec![&Memory32Fixed::new(
+                    ResourceTemplate::new(vec![Memory32Fixed::new(
                         true,
                         0xE800_0000,
                         0x1000_0000
-                    )])
+                    )
+                    .into()])
                 )]
             )
             .to_aml_bytes(),
@@ -1300,14 +1311,20 @@ mod tests {
         })
         */
         let crs_memory_32_fixed = [
-            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x11, 0x0A, 0x0E, 0x86, 0x09, 0x00, 0x01, 0x00,
-            0x00, 0x00, 0xE8, 0x00, 0x00, 0x00, 0x10, 0x79, 0x00,
+            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x11, 0x0A, 0x0E, 0x86, 0x09,
+            0x00, 0x01, 0x00, 0x00, 0x00, 0xE8, 0x00, 0x00, 0x00, 0x10, 0x79,
+            0x00,
         ];
 
         assert_eq!(
             Name::new(
                 "_CRS".into(),
-                &ResourceTemplate::new(vec![&Memory32Fixed::new(true, 0xE800_0000, 0x1000_0000)])
+                ResourceTemplate::new(vec![Memory32Fixed::new(
+                    true,
+                    0xE800_0000,
+                    0x1000_0000
+                )
+                .into()])
             )
             .to_aml_bytes(),
             crs_memory_32_fixed
@@ -1363,14 +1380,18 @@ mod tests {
 
         // WordBusNumber from above
         let crs_word_bus_number = [
-            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x15, 0x0A, 0x12, 0x88, 0x0D, 0x00, 0x02, 0x0C,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x01, 0x79, 0x00,
+            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x15, 0x0A, 0x12, 0x88, 0x0D,
+            0x00, 0x02, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00,
+            0x00, 0x00, 0x01, 0x79, 0x00,
         ];
 
         assert_eq!(
             Name::new(
                 "_CRS".into(),
-                &ResourceTemplate::new(vec![&AddressSpace::new_bus_number(0x0u16, 0xffu16),])
+                ResourceTemplate::new(vec![AddressSpace::new_bus_number(
+                    0x0u16, 0xffu16
+                )
+                .into(),])
             )
             .to_aml_bytes(),
             &crs_word_bus_number
@@ -1378,18 +1399,18 @@ mod tests {
 
         // WordIO blocks (x 2) from above
         let crs_word_io = [
-            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x25, 0x0A, 0x22, 0x88, 0x0D, 0x00, 0x01, 0x0C,
-            0x03, 0x00, 0x00, 0x00, 0x00, 0xF7, 0x0C, 0x00, 0x00, 0xF8, 0x0C, 0x88, 0x0D, 0x00,
-            0x01, 0x0C, 0x03, 0x00, 0x00, 0x00, 0x0D, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xF3, 0x79,
-            0x00,
+            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x25, 0x0A, 0x22, 0x88, 0x0D,
+            0x00, 0x01, 0x0C, 0x03, 0x00, 0x00, 0x00, 0x00, 0xF7, 0x0C, 0x00,
+            0x00, 0xF8, 0x0C, 0x88, 0x0D, 0x00, 0x01, 0x0C, 0x03, 0x00, 0x00,
+            0x00, 0x0D, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xF3, 0x79, 0x00,
         ];
 
         assert_eq!(
             Name::new(
                 "_CRS".into(),
-                &ResourceTemplate::new(vec![
-                    &AddressSpace::new_io(0x0u16, 0xcf7u16),
-                    &AddressSpace::new_io(0xd00u16, 0xffffu16),
+                ResourceTemplate::new(vec![
+                    AddressSpace::new_io(0x0u16, 0xcf7u16).into(),
+                    AddressSpace::new_io(0xd00u16, 0xffffu16).into(),
                 ])
             )
             .to_aml_bytes(),
@@ -1398,29 +1419,32 @@ mod tests {
 
         // DWordMemory blocks (x 2) from above
         let crs_dword_memory = [
-            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x39, 0x0A, 0x36, 0x87, 0x17, 0x00, 0x00, 0x0C,
-            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0xFF, 0xFF, 0x0B, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x87, 0x17, 0x00, 0x00, 0x0C, 0x01, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0xFF, 0xFF, 0xBF, 0xFE, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0xC0, 0x3E, 0x79, 0x00,
+            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x39, 0x0A, 0x36, 0x87, 0x17,
+            0x00, 0x00, 0x0C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A,
+            0x00, 0xFF, 0xFF, 0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x02, 0x00, 0x87, 0x17, 0x00, 0x00, 0x0C, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0xC0, 0xFF, 0xFF, 0xBF, 0xFE, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0xC0, 0x3E, 0x79, 0x00,
         ];
 
         assert_eq!(
             Name::new(
                 "_CRS".into(),
-                &ResourceTemplate::new(vec![
-                    &AddressSpace::new_memory(
+                ResourceTemplate::new(vec![
+                    AddressSpace::new_memory(
                         AddressSpaceCachable::Cacheable,
                         true,
                         0xa_0000u32,
                         0xb_ffffu32
-                    ),
-                    &AddressSpace::new_memory(
+                    )
+                    .into(),
+                    AddressSpace::new_memory(
                         AddressSpaceCachable::NotCacheable,
                         true,
                         0xc000_0000u32,
                         0xfebf_ffffu32
-                    ),
+                    )
+                    .into(),
                 ])
             )
             .to_aml_bytes(),
@@ -1429,22 +1453,24 @@ mod tests {
 
         // QWordMemory from above
         let crs_qword_memory = [
-            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x33, 0x0A, 0x30, 0x8A, 0x2B, 0x00, 0x00, 0x0C,
-            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08,
-            0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x79,
-            0x00,
+            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x33, 0x0A, 0x30, 0x8A, 0x2B,
+            0x00, 0x00, 0x0C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0xFF, 0xFF,
+            0xFF, 0xFF, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+            0x79, 0x00,
         ];
 
         assert_eq!(
             Name::new(
                 "_CRS".into(),
-                &ResourceTemplate::new(vec![&AddressSpace::new_memory(
+                ResourceTemplate::new(vec![AddressSpace::new_memory(
                     AddressSpaceCachable::Cacheable,
                     true,
                     0x8_0000_0000u64,
                     0xf_ffff_ffffu64
-                )])
+                )
+                .into()])
             )
             .to_aml_bytes(),
             &crs_qword_memory[..]
@@ -1467,16 +1493,17 @@ mod tests {
 
         */
         let interrupt_io_data = [
-            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x16, 0x0A, 0x13, 0x89, 0x06, 0x00, 0x03, 0x01,
-            0x04, 0x00, 0x00, 0x00, 0x47, 0x01, 0xF8, 0x03, 0xF8, 0x03, 0x00, 0x08, 0x79, 0x00,
+            0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x16, 0x0A, 0x13, 0x89, 0x06,
+            0x00, 0x03, 0x01, 0x04, 0x00, 0x00, 0x00, 0x47, 0x01, 0xF8, 0x03,
+            0xF8, 0x03, 0x00, 0x08, 0x79, 0x00,
         ];
 
         assert_eq!(
             Name::new(
                 "_CRS".into(),
-                &ResourceTemplate::new(vec![
-                    &Interrupt::new(true, true, false, false, 4),
-                    &IO::new(0x3f8, 0x3f8, 0, 0x8)
+                ResourceTemplate::new(vec![
+                    Interrupt::new(true, true, false, false, 4).into(),
+                    IO::new(0x3f8, 0x3f8, 0, 0x8).into(),
                 ])
             )
             .to_aml_bytes(),
@@ -1509,9 +1536,10 @@ mod tests {
             0x05
         })
         */
-        let s5_sleep_data = [0x08, 0x5F, 0x53, 0x35, 0x5F, 0x12, 0x04, 0x01, 0x0A, 0x05];
+        let s5_sleep_data =
+            [0x08, 0x5F, 0x53, 0x35, 0x5F, 0x12, 0x04, 0x01, 0x0A, 0x05];
 
-        let s5 = Name::new("_S5_".into(), &Package::new(vec![&5u8]));
+        let s5 = Name::new("_S5_".into(), Package::new(vec![5u8.into()]));
 
         assert_eq!(s5_sleep_data.to_vec(), s5.to_aml_bytes());
     }
@@ -1519,7 +1547,7 @@ mod tests {
     #[test]
     fn test_eisa_name() {
         assert_eq!(
-            Name::new("_HID".into(), &EISAName::new("PNP0501")).to_aml_bytes(),
+            Name::new("_HID".into(), EISAName::new("PNP0501")).to_aml_bytes(),
             [0x08, 0x5F, 0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x05, 0x01],
         )
     }
@@ -1539,7 +1567,10 @@ mod tests {
         );
         assert_eq!(
             (&"_SB_.PCI0._HID".into() as &Path).to_aml_bytes(),
-            [0x2F, 0x03, 0x5F, 0x53, 0x42, 0x5F, 0x50, 0x43, 0x49, 0x30, 0x5F, 0x48, 0x49, 0x44]
+            [
+                0x2F, 0x03, 0x5F, 0x53, 0x42, 0x5F, 0x50, 0x43, 0x49, 0x30,
+                0x5F, 0x48, 0x49, 0x44
+            ]
         );
     }
 
@@ -1557,7 +1588,7 @@ mod tests {
     #[test]
     fn test_name() {
         assert_eq!(
-            Name::new("_SB_.PCI0._UID".into(), &0x1234u16).to_aml_bytes(),
+            Name::new("_SB_.PCI0._UID".into(), 0x1234u16).to_aml_bytes(),
             [
                 0x08, /* NameOp */
                 0x2F, /* MultiNamePrefix */
@@ -1586,7 +1617,13 @@ mod tests {
     #[test]
     fn test_method() {
         assert_eq!(
-            Method::new("_STA".into(), 0, false, vec![&Return::new(&0xfu8)]).to_aml_bytes(),
+            Method::new(
+                "_STA".into(),
+                0,
+                false,
+                vec![Return::new(0xfu8).into()]
+            )
+            .to_aml_bytes(),
             [0x14, 0x09, 0x5F, 0x53, 0x54, 0x41, 0x00, 0xA4, 0x0A, 0x0F]
         );
     }
@@ -1608,9 +1645,10 @@ mod tests {
         */
 
         let field_data = [
-            0x5Bu8, 0x81, 0x23, 0x50, 0x52, 0x53, 0x54, 0x41, 0x00, 0x20, 0x43, 0x50, 0x45, 0x4E,
-            0x01, 0x43, 0x49, 0x4E, 0x53, 0x01, 0x43, 0x52, 0x4D, 0x56, 0x01, 0x43, 0x45, 0x4A,
-            0x30, 0x01, 0x00, 0x04, 0x43, 0x43, 0x4D, 0x44, 0x08,
+            0x5Bu8, 0x81, 0x23, 0x50, 0x52, 0x53, 0x54, 0x41, 0x00, 0x20, 0x43,
+            0x50, 0x45, 0x4E, 0x01, 0x43, 0x49, 0x4E, 0x53, 0x01, 0x43, 0x52,
+            0x4D, 0x56, 0x01, 0x43, 0x45, 0x4A, 0x30, 0x01, 0x00, 0x04, 0x43,
+            0x43, 0x4D, 0x44, 0x08,
         ];
 
         assert_eq!(
@@ -1642,8 +1680,8 @@ mod tests {
         */
 
         let field_data = [
-            0x5Bu8, 0x81, 0x12, 0x50, 0x52, 0x53, 0x54, 0x03, 0x43, 0x53, 0x45, 0x4C, 0x20, 0x00,
-            0x20, 0x43, 0x44, 0x41, 0x54, 0x20,
+            0x5Bu8, 0x81, 0x12, 0x50, 0x52, 0x53, 0x54, 0x03, 0x43, 0x53, 0x45,
+            0x4C, 0x20, 0x00, 0x20, 0x43, 0x44, 0x41, 0x54, 0x20,
         ];
 
         assert_eq!(
@@ -1668,11 +1706,13 @@ mod tests {
             OperationRegion (PRST, SystemIO, 0x0CD8, 0x0C)
         */
         let op_region_data = [
-            0x5Bu8, 0x80, 0x50, 0x52, 0x53, 0x54, 0x01, 0x0B, 0xD8, 0x0C, 0x0A, 0x0C,
+            0x5Bu8, 0x80, 0x50, 0x52, 0x53, 0x54, 0x01, 0x0B, 0xD8, 0x0C, 0x0A,
+            0x0C,
         ];
 
         assert_eq!(
-            OpRegion::new("PRST".into(), OpRegionSpace::SystemIO, 0xcd8, 0xc).to_aml_bytes(),
+            OpRegion::new("PRST".into(), OpRegionSpace::SystemIO, 0xcd8, 0xc)
+                .to_aml_bytes(),
             &op_region_data[..]
         );
     }
@@ -1688,8 +1728,8 @@ mod tests {
             }
         */
         let arg_if_data = [
-            0x14, 0x0F, 0x54, 0x45, 0x53, 0x54, 0x01, 0xA0, 0x06, 0x93, 0x68, 0x00, 0xA4, 0x01,
-            0xA4, 0x00,
+            0x14, 0x0F, 0x54, 0x45, 0x53, 0x54, 0x01, 0xA0, 0x06, 0x93, 0x68,
+            0x00, 0xA4, 0x01, 0xA4, 0x00,
         ];
 
         assert_eq!(
@@ -1698,8 +1738,12 @@ mod tests {
                 1,
                 false,
                 vec![
-                    &If::new(&Equal::new(&Arg(0), &ZERO), vec![&Return::new(&ONE)]),
-                    &Return::new(&ZERO)
+                    If::new(
+                        Equal::new(Arg(0), ZERO),
+                        vec![Return::new(ONE).into()]
+                    )
+                    .into(),
+                    Return::new(ZERO).into()
                 ]
             )
             .to_aml_bytes(),
@@ -1719,8 +1763,8 @@ mod tests {
             }
         */
         let local_if_data = [
-            0x14, 0x12, 0x54, 0x45, 0x53, 0x54, 0x00, 0x70, 0x01, 0x60, 0xA0, 0x06, 0x93, 0x60,
-            0x00, 0xA4, 0x01, 0xA4, 0x00,
+            0x14, 0x12, 0x54, 0x45, 0x53, 0x54, 0x00, 0x70, 0x01, 0x60, 0xA0,
+            0x06, 0x93, 0x60, 0x00, 0xA4, 0x01, 0xA4, 0x00,
         ];
         assert_eq!(
             Method::new(
@@ -1728,9 +1772,13 @@ mod tests {
                 0,
                 false,
                 vec![
-                    &Store::new(&Local(0), &ONE),
-                    &If::new(&Equal::new(&Local(0), &ZERO), vec![&Return::new(&ONE)]),
-                    &Return::new(&ZERO)
+                    Store::new(Local(0), ONE).into(),
+                    If::new(
+                        Equal::new(Local(0), ZERO),
+                        vec![Return::new(ONE).into()]
+                    )
+                    .into(),
+                    Return::new(ZERO).into()
                 ]
             )
             .to_aml_bytes(),
@@ -1755,29 +1803,30 @@ mod tests {
         */
 
         let mutex_data = [
-            0x5B, 0x82, 0x33, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x4D, 0x48, 0x50, 0x43, 0x08, 0x5F,
-            0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x0A, 0x06, 0x5B, 0x01, 0x4D, 0x4C, 0x43, 0x4B,
-            0x00, 0x14, 0x17, 0x54, 0x45, 0x53, 0x54, 0x00, 0x5B, 0x23, 0x4D, 0x4C, 0x43, 0x4B,
-            0xFF, 0xFF, 0x70, 0x01, 0x60, 0x5B, 0x27, 0x4D, 0x4C, 0x43, 0x4B,
+            0x5B, 0x82, 0x33, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x4D, 0x48, 0x50,
+            0x43, 0x08, 0x5F, 0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x0A, 0x06,
+            0x5B, 0x01, 0x4D, 0x4C, 0x43, 0x4B, 0x00, 0x14, 0x17, 0x54, 0x45,
+            0x53, 0x54, 0x00, 0x5B, 0x23, 0x4D, 0x4C, 0x43, 0x4B, 0xFF, 0xFF,
+            0x70, 0x01, 0x60, 0x5B, 0x27, 0x4D, 0x4C, 0x43, 0x4B,
         ];
 
-        let mutex = Mutex::new("MLCK".into(), 0);
         assert_eq!(
             Device::new(
                 "_SB_.MHPC".into(),
                 vec![
-                    &Name::new("_HID".into(), &EISAName::new("PNP0A06")),
-                    &mutex,
-                    &Method::new(
+                    Name::new("_HID".into(), EISAName::new("PNP0A06")).into(),
+                    Mutex::new("MLCK".into(), 0).into(),
+                    Method::new(
                         "TEST".into(),
                         0,
                         false,
                         vec![
-                            &Acquire::new("MLCK".into(), 0xffff),
-                            &Store::new(&Local(0), &ONE),
-                            &Release::new("MLCK".into())
+                            Acquire::new("MLCK".into(), 0xffff).into(),
+                            Store::new(Local(0), ONE).into(),
+                            Release::new("MLCK".into()).into()
                         ]
                     )
+                    .into()
                 ]
             )
             .to_aml_bytes(),
@@ -1798,22 +1847,24 @@ mod tests {
         }
         */
         let notify_data = [
-            0x5B, 0x82, 0x21, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x4D, 0x48, 0x50, 0x43, 0x08, 0x5F,
-            0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x0A, 0x06, 0x14, 0x0C, 0x54, 0x45, 0x53, 0x54,
-            0x00, 0x86, 0x4D, 0x48, 0x50, 0x43, 0x01,
+            0x5B, 0x82, 0x21, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x4D, 0x48, 0x50,
+            0x43, 0x08, 0x5F, 0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x0A, 0x06,
+            0x14, 0x0C, 0x54, 0x45, 0x53, 0x54, 0x00, 0x86, 0x4D, 0x48, 0x50,
+            0x43, 0x01,
         ];
 
         assert_eq!(
             Device::new(
                 "_SB_.MHPC".into(),
                 vec![
-                    &Name::new("_HID".into(), &EISAName::new("PNP0A06")),
-                    &Method::new(
+                    Name::new("_HID".into(), EISAName::new("PNP0A06")).into(),
+                    Method::new(
                         "TEST".into(),
                         0,
                         false,
-                        vec![&Notify::new(&Path::new("MHPC"), &ONE),]
+                        vec![Notify::new(Path::new("MHPC"), ONE).into(),]
                     )
+                    .into()
                 ]
             )
             .to_aml_bytes(),
@@ -1839,28 +1890,31 @@ mod tests {
         */
 
         let while_data = [
-            0x5B, 0x82, 0x28, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x4D, 0x48, 0x50, 0x43, 0x08, 0x5F,
-            0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x0A, 0x06, 0x14, 0x13, 0x54, 0x45, 0x53, 0x54,
-            0x00, 0x70, 0x00, 0x60, 0xA2, 0x09, 0x95, 0x60, 0x0A, 0x04, 0x72, 0x60, 0x01, 0x60,
+            0x5B, 0x82, 0x28, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x4D, 0x48, 0x50,
+            0x43, 0x08, 0x5F, 0x48, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x0A, 0x06,
+            0x14, 0x13, 0x54, 0x45, 0x53, 0x54, 0x00, 0x70, 0x00, 0x60, 0xA2,
+            0x09, 0x95, 0x60, 0x0A, 0x04, 0x72, 0x60, 0x01, 0x60,
         ];
 
         assert_eq!(
             Device::new(
                 "_SB_.MHPC".into(),
                 vec![
-                    &Name::new("_HID".into(), &EISAName::new("PNP0A06")),
-                    &Method::new(
+                    Name::new("_HID".into(), EISAName::new("PNP0A06")).into(),
+                    Method::new(
                         "TEST".into(),
                         0,
                         false,
                         vec![
-                            &Store::new(&Local(0), &ZERO),
-                            &While::new(
-                                &LessThan::new(&Local(0), &4usize),
-                                vec![&Add::new(&Local(0), &Local(0), &ONE)]
+                            Store::new(Local(0), ZERO).into(),
+                            While::new(
+                                LessThan::new(Local(0), 4usize),
+                                vec![Add::new(Local(0), Local(0), ONE).into()]
                             )
+                            .into()
                         ]
                     )
+                    .into()
                 ]
             )
             .to_aml_bytes(),
@@ -1882,8 +1936,9 @@ mod tests {
             }
         */
         let test_data = [
-            0x14, 0x0C, 0x54, 0x53, 0x54, 0x31, 0x01, 0x54, 0x53, 0x54, 0x32, 0x01, 0x01, 0x14,
-            0x0B, 0x54, 0x53, 0x54, 0x32, 0x02, 0x54, 0x53, 0x54, 0x31, 0x01,
+            0x14, 0x0C, 0x54, 0x53, 0x54, 0x31, 0x01, 0x54, 0x53, 0x54, 0x32,
+            0x01, 0x01, 0x14, 0x0B, 0x54, 0x53, 0x54, 0x32, 0x02, 0x54, 0x53,
+            0x54, 0x31, 0x01,
         ];
 
         let mut methods = Vec::new();
@@ -1892,7 +1947,11 @@ mod tests {
                 "TST1".into(),
                 1,
                 false,
-                vec![&MethodCall::new("TST2".into(), vec![&ONE, &ONE])],
+                vec![MethodCall::new(
+                    "TST2".into(),
+                    vec![ONE.into(), ONE.into()],
+                )
+                .into()],
             )
             .to_aml_bytes(),
         );
@@ -1901,7 +1960,7 @@ mod tests {
                 "TST2".into(),
                 2,
                 false,
-                vec![&MethodCall::new("TST1".into(), vec![&ONE])],
+                vec![MethodCall::new("TST1".into(), vec![ONE.into()]).into()],
             )
             .to_aml_bytes(),
         );
@@ -1917,14 +1976,16 @@ mod tests {
         })
         */
         let buffer_data = [
-            0x08, 0x5F, 0x4D, 0x41, 0x54, 0x11, 0x0B, 0x0A, 0x08, 0x00, 0x08, 0x00, 0x00, 0x01,
-            0x00, 0x00, 0x00,
+            0x08, 0x5F, 0x4D, 0x41, 0x54, 0x11, 0x0B, 0x0A, 0x08, 0x00, 0x08,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
         ];
 
         assert_eq!(
             Name::new(
                 "_MAT".into(),
-                &Buffer::new(vec![0x00, 0x08, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00])
+                Buffer::new(vec![
+                    0x00, 0x08, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00
+                ])
             )
             .to_aml_bytes(),
             &buffer_data[..]
@@ -1952,13 +2013,15 @@ mod tests {
         }
         */
         let data = [
-            0x14, 0x41, 0x06, 0x4D, 0x43, 0x52, 0x53, 0x08, 0x08, 0x4D, 0x52, 0x36, 0x34, 0x11,
-            0x33, 0x0A, 0x30, 0x8A, 0x2B, 0x00, 0x00, 0x0C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF,
-            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,
-            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x79, 0x00, 0x8F, 0x4D, 0x52, 0x36, 0x34,
-            0x0A, 0x0E, 0x4D, 0x49, 0x4E, 0x5F, 0x8F, 0x4D, 0x52, 0x36, 0x34, 0x0A, 0x16, 0x4D,
-            0x41, 0x58, 0x5F, 0x8F, 0x4D, 0x52, 0x36, 0x34, 0x0A, 0x26, 0x4C, 0x45, 0x4E, 0x5F,
+            0x14, 0x41, 0x06, 0x4D, 0x43, 0x52, 0x53, 0x08, 0x08, 0x4D, 0x52,
+            0x36, 0x34, 0x11, 0x33, 0x0A, 0x30, 0x8A, 0x2B, 0x00, 0x00, 0x0C,
+            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x79, 0x00, 0x8F,
+            0x4D, 0x52, 0x36, 0x34, 0x0A, 0x0E, 0x4D, 0x49, 0x4E, 0x5F, 0x8F,
+            0x4D, 0x52, 0x36, 0x34, 0x0A, 0x16, 0x4D, 0x41, 0x58, 0x5F, 0x8F,
+            0x4D, 0x52, 0x36, 0x34, 0x0A, 0x26, 0x4C, 0x45, 0x4E, 0x5F,
         ];
 
         assert_eq!(
@@ -1967,18 +2030,35 @@ mod tests {
                 0,
                 true,
                 vec![
-                    &Name::new(
+                    Name::new(
                         "MR64".into(),
-                        &ResourceTemplate::new(vec![&AddressSpace::new_memory(
+                        ResourceTemplate::new(vec![AddressSpace::new_memory(
                             AddressSpaceCachable::Cacheable,
                             true,
                             0x0000_0000_0000_0000u64,
                             0xFFFF_FFFF_FFFF_FFFEu64
-                        )])
-                    ),
-                    &CreateField::<u64>::new(&Path::new("MR64"), &14usize, "MIN_".into()),
-                    &CreateField::<u64>::new(&Path::new("MR64"), &22usize, "MAX_".into()),
-                    &CreateField::<u64>::new(&Path::new("MR64"), &38usize, "LEN_".into()),
+                        )
+                        .into()])
+                    )
+                    .into(),
+                    CreateQWordField::new(
+                        Path::new("MR64"),
+                        14usize,
+                        "MIN_".into()
+                    )
+                    .into(),
+                    CreateQWordField::new(
+                        Path::new("MR64"),
+                        22usize,
+                        "MAX_".into()
+                    )
+                    .into(),
+                    CreateQWordField::new(
+                        Path::new("MR64"),
+                        38usize,
+                        "LEN_".into()
+                    )
+                    .into(),
                 ]
             )
             .to_aml_bytes(),

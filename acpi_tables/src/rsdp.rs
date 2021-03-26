@@ -53,15 +53,11 @@ mod tests {
     #[test]
     fn test_rsdp() {
         let rsdp = RSDP::new(*b"CHYPER", 0xdead_beef);
-        let sum = rsdp
-            .as_slice()
-            .iter()
-            .fold(0u8, |acc, x| acc.wrapping_add(*x));
+        let sum =
+            rsdp.as_slice().iter().fold(0u8, |acc, x| acc.wrapping_add(*x));
         assert_eq!(sum, 0);
-        let sum: u8 = rsdp
-            .as_slice()
-            .iter()
-            .fold(0u8, |acc, x| acc.wrapping_add(*x));
+        let sum: u8 =
+            rsdp.as_slice().iter().fold(0u8, |acc, x| acc.wrapping_add(*x));
         assert_eq!(sum, 0);
     }
 }

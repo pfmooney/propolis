@@ -122,16 +122,12 @@ mod tests {
     #[test]
     fn test_sdt() {
         let mut sdt = SDT::new(*b"TEST", 40, 1, *b"CLOUDH", *b"TESTTEST", 1);
-        let sum: u8 = sdt
-            .as_slice()
-            .iter()
-            .fold(0u8, |acc, x| acc.wrapping_add(*x));
+        let sum: u8 =
+            sdt.as_slice().iter().fold(0u8, |acc, x| acc.wrapping_add(*x));
         assert_eq!(sum, 0);
         sdt.write_u32(36, 0x12345678);
-        let sum: u8 = sdt
-            .as_slice()
-            .iter()
-            .fold(0u8, |acc, x| acc.wrapping_add(*x));
+        let sum: u8 =
+            sdt.as_slice().iter().fold(0u8, |acc, x| acc.wrapping_add(*x));
         assert_eq!(sum, 0);
     }
 }
