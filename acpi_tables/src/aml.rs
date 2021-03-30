@@ -41,6 +41,7 @@ impl Aml for Ones {
     }
 }
 
+#[derive(Clone)]
 pub struct Path {
     root: bool,
     name_parts: Vec<[u8; 4]>,
@@ -416,11 +417,11 @@ pub enum AddressSpaceCachable {
     NotCacheable,
     Cacheable,
     WriteCombining,
-    PreFetchable,
+    Prefetchable,
 }
 
 pub struct AddressSpace<T> {
-    r#type: AddressSpaceType,
+    as_type: AddressSpaceType,
     min: T,
     max: T,
     type_flags: u8,
@@ -434,7 +435,7 @@ impl<T> AddressSpace<T> {
         max: T,
     ) -> Self {
         AddressSpace {
-            r#type: AddressSpaceType::Memory,
+            as_type: AddressSpaceType::Memory,
             min,
             max,
             type_flags: (cacheable as u8) << 1 | read_write as u8,
@@ -443,7 +444,7 @@ impl<T> AddressSpace<T> {
 
     pub fn new_io(min: T, max: T) -> Self {
         AddressSpace {
-            r#type: AddressSpaceType::IO,
+            as_type: AddressSpaceType::IO,
             min,
             max,
             type_flags: 3, /* EntireRange */
@@ -452,7 +453,7 @@ impl<T> AddressSpace<T> {
 
     pub fn new_bus_number(min: T, max: T) -> Self {
         AddressSpace {
-            r#type: AddressSpaceType::BusNumber,
+            as_type: AddressSpaceType::BusNumber,
             min,
             max,
             type_flags: 0,
@@ -462,7 +463,7 @@ impl<T> AddressSpace<T> {
     fn push_header(&self, bytes: &mut Vec<u8>, descriptor: u8, length: usize) {
         bytes.push(descriptor); /* Word Address Space Descriptor */
         bytes.append(&mut (length as u16).to_le_bytes().to_vec());
-        bytes.push(self.r#type as u8); /* type */
+        bytes.push(self.as_type as u8); /* type */
         let generic_flags = 1 << 2 /* Min Fixed */ | 1 << 3; /* Max Fixed */
         bytes.push(generic_flags);
         bytes.push(self.type_flags);
@@ -819,12 +820,12 @@ pub struct OpRegion {
 
 impl OpRegion {
     pub fn new(
-        path: Path,
+        path: impl AsPath,
         space: OpRegionSpace,
         offset: usize,
         length: usize,
     ) -> Self {
-        OpRegion { path, space, offset, length }
+        OpRegion { path: path.as_path(), space, offset, length }
     }
 }
 
@@ -867,6 +868,33 @@ impl<T: Aml> Aml for If<T> {
         }
 
         bytes.insert(0, 0xa0); /* IfOp */
+        bytes
+    }
+}
+pub struct Else {
+    pub children: Vec<Box<dyn Aml>>,
+}
+
+impl Else {
+    pub fn new(children: Vec<Box<dyn Aml>>) -> Self {
+        Else { children }
+    }
+}
+
+impl Aml for Else {
+    fn to_aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for child in self.children.iter() {
+            bytes.extend_from_slice(&child.to_aml_bytes());
+        }
+
+        let mut pkg_length = create_pkg_length(&bytes, true);
+        pkg_length.reverse();
+        for byte in pkg_length {
+            bytes.insert(0, byte);
+        }
+
+        bytes.insert(0, 0xa1); /* IfOp */
         bytes
     }
 }
@@ -1080,6 +1108,56 @@ macro_rules! binary_op {
         }
 
         impl<A: Aml, B: Aml, T: Aml> $name<A, B, T> {
+            /// In the form `target` = `a` OP `b`
+            pub fn new_assign(target: T, a: A, b: B) -> Self {
+                $name { target, a, b }
+            }
+        }
+
+        impl<A: Aml, B: Aml> $name<A, B, Zero> {
+            /// In the form `a` OP `b`, for use in control structures (such as
+            /// `If`) which require a test, but not an assignment.
+            pub fn new(a: A, b: B) -> Self {
+                $name { target: ZERO, a, b }
+            }
+        }
+
+        impl<A: Aml, B: Aml, T: Aml> Aml for $name<A, B, T> {
+            fn to_aml_bytes(&self) -> Vec<u8> {
+                let mut bytes = Vec::new();
+                bytes.push($opcode); /* Op for the binary operator */
+                bytes.extend_from_slice(&self.a.to_aml_bytes());
+                bytes.extend_from_slice(&self.b.to_aml_bytes());
+                bytes.extend_from_slice(&self.target.to_aml_bytes());
+                bytes
+            }
+        }
+    };
+}
+
+// binary operators: TermArg TermArg Target
+binary_op!(Add, 0x72);
+binary_op!(Concat, 0x73);
+binary_op!(Subtract, 0x74);
+binary_op!(Multiply, 0x77);
+binary_op!(ShiftLeft, 0x79);
+binary_op!(ShiftRight, 0x7A);
+binary_op!(And, 0x7B);
+binary_op!(Nand, 0x7C);
+binary_op!(Or, 0x7D);
+binary_op!(Nor, 0x7E);
+binary_op!(Xor, 0x7F);
+
+macro_rules! assigned_op {
+    ($name:ident, $opcode:expr) => {
+        pub struct $name<A: Aml, B: Aml, T: Aml> {
+            a: A,
+            b: B,
+            target: T,
+        }
+
+        impl<A: Aml, B: Aml, T: Aml> $name<A, B, T> {
+            /// In the form `target` = `a` OP `b`
             pub fn new(target: T, a: A, b: B) -> Self {
                 $name { target, a, b }
             }
@@ -1098,22 +1176,59 @@ macro_rules! binary_op {
     };
 }
 
-/* binary operators: TermArg TermArg Target */
-binary_op!(Add, 0x72);
-binary_op!(Concat, 0x73);
-binary_op!(Subtract, 0x74);
-binary_op!(Multiply, 0x77);
-binary_op!(ShiftLeft, 0x79);
-binary_op!(ShiftRight, 0x7A);
-binary_op!(And, 0x7B);
-binary_op!(Nand, 0x7C);
-binary_op!(Or, 0x7D);
-binary_op!(Nor, 0x7E);
-binary_op!(Xor, 0x7F);
-binary_op!(ConateRes, 0x84);
-binary_op!(Mod, 0x85);
-binary_op!(Index, 0x88);
-binary_op!(ToString, 0x9C);
+assigned_op!(ConcatRes, 0x84);
+assigned_op!(Mod, 0x85);
+assigned_op!(Index, 0x88);
+assigned_op!(ToString, 0x9C);
+
+macro_rules! logical_op {
+    ($name:ident, $opcode:expr) => {
+        pub struct $name<A: Aml, B: Aml> {
+            a: A,
+            b: B,
+        }
+
+        impl<A: Aml, B: Aml> $name<A, B> {
+            pub fn new(a: A, b: B) -> Self {
+                $name { a, b }
+            }
+        }
+
+        impl<A: Aml, B: Aml> Aml for $name<A, B> {
+            fn to_aml_bytes(&self) -> Vec<u8> {
+                let mut bytes = Vec::new();
+                bytes.push($opcode); /* Op for the logical operator */
+                bytes.extend_from_slice(&self.a.to_aml_bytes());
+                bytes.extend_from_slice(&self.b.to_aml_bytes());
+                bytes
+            }
+        }
+    };
+}
+
+// logical operators: TermArg TermArg
+logical_op!(LAnd, 0x90);
+logical_op!(LOr, 0x91);
+logical_op!(LEqual, 0x93);
+logical_op!(LGreater, 0x94);
+logical_op!(LLess, 0x95);
+
+pub struct LNot<A: Aml> {
+    a: A,
+}
+impl<A: Aml> LNot<A> {
+    pub fn new(a: A) -> Self {
+        Self { a }
+    }
+}
+impl<A: Aml> Aml for LNot<A> {
+    fn to_aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x92u8);
+        bytes.extend_from_slice(&self.a.to_aml_bytes());
+        bytes
+    }
+}
 
 pub struct MethodCall {
     name: Path,
@@ -1121,8 +1236,8 @@ pub struct MethodCall {
 }
 
 impl MethodCall {
-    pub fn new(name: Path, args: Vec<Box<dyn Aml>>) -> Self {
-        MethodCall { name, args }
+    pub fn new(name: impl AsPath, args: Vec<Box<dyn Aml>>) -> Self {
+        MethodCall { name: name.as_path(), args }
     }
 }
 
@@ -1721,7 +1836,7 @@ mod tests {
         ];
 
         assert_eq!(
-            OpRegion::new("PRST".into(), OpRegionSpace::SystemIO, 0xcd8, 0xc)
+            OpRegion::new("PRST", OpRegionSpace::SystemIO, 0xcd8, 0xc)
                 .to_aml_bytes(),
             &op_region_data[..]
         );
@@ -1919,7 +2034,8 @@ mod tests {
                             Store::new(Local(0), ZERO).into(),
                             While::new(
                                 LessThan::new(Local(0), 4usize),
-                                vec![Add::new(Local(0), Local(0), ONE).into()]
+                                vec![Add::new_assign(Local(0), Local(0), ONE)
+                                    .into()]
                             )
                             .into()
                         ]
@@ -1957,11 +2073,8 @@ mod tests {
                 "TST1",
                 1,
                 false,
-                vec![MethodCall::new(
-                    "TST2".into(),
-                    vec![ONE.into(), ONE.into()],
-                )
-                .into()],
+                vec![MethodCall::new("TST2", vec![ONE.into(), ONE.into()])
+                    .into()],
             )
             .to_aml_bytes(),
         );
@@ -1970,7 +2083,7 @@ mod tests {
                 "TST2",
                 2,
                 false,
-                vec![MethodCall::new("TST1".into(), vec![ONE.into()]).into()],
+                vec![MethodCall::new("TST1", vec![ONE.into()]).into()],
             )
             .to_aml_bytes(),
         );
