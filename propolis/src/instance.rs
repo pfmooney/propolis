@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use std::any::Any;
 use std::io;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -39,7 +40,8 @@ impl State {
     }
 }
 
-type TransitionFunc = dyn Fn(State) + Send + Sync + 'static;
+type TransitionFunc =
+    dyn Fn(State, &Inventory, &DispCtx) + Send + Sync + 'static;
 
 struct InnerState {
     current: State,
@@ -137,16 +139,28 @@ impl Instance {
     }
 
     fn transition_cb(&self, state: &MutexGuard<InnerState>, next_state: State) {
-        for f in state.transition_funcs.iter() {
-            f(next_state)
-        }
+        state.disp.with_ctx(|ctx| {
+            for func in state.transition_funcs.iter() {
+                func(next_state, &state.inv, ctx)
+            }
+        });
     }
-    fn quiesce_inventory(&self, state: &MutexGuard<InnerState>) {
+    fn inventory_quiesce(&self, state: &MutexGuard<InnerState>) {
         assert_eq!(state.current, State::Quiesce);
         state.disp.with_ctx(|ctx| {
             state.inv.iter_over(|iter| {
                 for ent in iter {
                     ent.quiesce(ctx);
+                }
+            });
+        });
+    }
+    fn inventory_reset(&self, state: &MutexGuard<InnerState>) {
+        assert_eq!(state.current, State::Quiesce);
+        state.disp.with_ctx(|ctx| {
+            state.inv.iter_over(|iter| {
+                for ent in iter {
+                    ent.reset(ctx);
                 }
             });
         });
@@ -195,6 +209,7 @@ impl Instance {
                     _ => State::Boot,
                 },
                 State::Boot => {
+                    self.transition_cb(&state, state.current);
                     match target {
                         Some(State::Run) => {
                             // XXX: pause for conditions
@@ -204,13 +219,16 @@ impl Instance {
                         _ => State::Quiesce,
                     }
                 }
-                State::Run => match target {
-                    Some(_) => State::Quiesce,
-                    None => State::Run,
-                },
+                State::Run => {
+                    self.transition_cb(&state, state.current);
+                    match target {
+                        Some(_) => State::Quiesce,
+                        None => State::Run,
+                    }
+                }
                 State::Quiesce => {
                     state.disp.quiesce_workers();
-                    self.quiesce_inventory(&state);
+                    self.inventory_quiesce(&state);
                     match target {
                         Some(State::Halt) | Some(State::Destroy) => State::Halt,
                         Some(State::Reset) => State::Reset,
@@ -218,17 +236,28 @@ impl Instance {
                     }
                 }
                 State::Halt => {
-                    // XXX: collect any data?
+                    self.transition_cb(&state, state.current);
                     State::Destroy
                 }
                 State::Reset => {
-                    // XXX: reset devices
-                    State::Boot
+                    self.inventory_reset(&state);
+                    self.transition_cb(&state, state.current);
+                    match target {
+                        Some(State::Halt) => {
+                            // Would we break any invariants by progressing to Halt, or
+                            // alternatively going straight to Destroy?
+                            State::Destroy
+                        }
+                        Some(State::Destroy) => State::Destroy,
+                        Some(State::Reset) | Some(State::Boot) => State::Boot,
+                        None => state.current,
+                        t => panic!("unexpected target {:?}", t),
+                    }
                 }
                 State::Destroy => {
                     // XXX: clean up and bail
                     state.disp.destroy_workers();
-                    self.transition_cb(&state, State::Destroy);
+                    self.transition_cb(&state, state.current);
                     return;
                 }
             };

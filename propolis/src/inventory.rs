@@ -41,6 +41,18 @@ impl Inventory {
 
         f(&mut iter);
     }
+    pub fn get_ent(
+        &self,
+        id: EntityID,
+        f: impl Fn(Option<&Arc<dyn Any + Send + Sync + 'static>>),
+    ) {
+        let inner = self.inner.lock().unwrap();
+        if let Some(ent) = inner.entities.get(&id) {
+            f(Some(&ent.any));
+        } else {
+            f(None);
+        }
+    }
 }
 
 pub struct Iter<'a> {
@@ -81,6 +93,8 @@ struct Record {
 pub trait Entity: Send + Sync + 'static {
     #[allow(unused_variables)]
     fn quiesce(&self, ctx: &DispCtx) {}
+    #[allow(unused_variables)]
+    fn reset(&self, ctx: &DispCtx) {}
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]

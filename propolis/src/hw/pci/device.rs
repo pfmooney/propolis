@@ -128,6 +128,12 @@ struct State {
 
     update_in_progress: bool,
 }
+impl State {
+    fn reset(&mut self) {
+        self.reg_intr_line = 0xff;
+        self.reg_command = RegCmd::INTX_DIS;
+    }
+}
 
 #[derive(Default)]
 struct BarState {
@@ -297,6 +303,16 @@ impl Bars {
         assert!(!state.registered);
         state.addr = addr;
     }
+    fn reset(&self) {
+        for ent in self.entries.iter() {
+            // zero out all of the BAR address contents
+            if let Some(_def) = ent.define {
+                let mut state = ent.state.lock().unwrap();
+                assert!(!state.registered);
+                state.addr = 0;
+            }
+        }
+    }
 }
 
 struct Cap {
@@ -332,6 +348,9 @@ impl DeviceInst {
         inner: Arc<dyn Device>,
         inner_any: Arc<dyn Any + Send + Sync + 'static>,
     ) -> Self {
+        let mut state = State::default();
+        state.reset();
+
         Self {
             ident,
             lintr_req: false,
@@ -339,11 +358,7 @@ impl DeviceInst {
             msix_cfg,
             caps,
 
-            state: Mutex::new(State {
-                reg_intr_line: 0xff,
-                reg_command: RegCmd::INTX_DIS,
-                ..Default::default()
-            }),
+            state: Mutex::new(state),
             bars,
             cond: Condvar::new(),
 
@@ -715,6 +730,25 @@ impl DeviceInst {
         // TODO: quiesce other state
         self.inner.quiesce(ctx);
     }
+
+    pub fn reset(&self, ctx: &DispCtx) {
+        let state = self.state.lock().unwrap();
+        self.affects_intr_mode(state, |state| {
+            let old_cmd = state.reg_command;
+            state.reset();
+            let new_cmd = state.reg_command;
+
+            // Unregister all of the BARs
+            self.update_bar_registration(old_cmd ^ new_cmd, new_cmd, ctx);
+
+            // With the BARs unregistered, reset their contents to zero
+            self.bars.reset();
+
+            if let Some(msix) = self.msix_cfg.as_ref() {
+                msix.reset();
+            }
+        });
+    }
 }
 
 impl Endpoint for DeviceInst {
@@ -916,6 +950,14 @@ impl MsixEntry {
             self.pending = false;
             ctx.mctx.hdl().lapic_msi(self.addr, self.data as u64).unwrap();
         }
+    }
+    fn reset(&mut self) {
+        self.addr = 0;
+        self.data = 0;
+        self.mask_vec = false;
+        self.mask_func = false;
+        self.enabled = false;
+        self.pending = false;
     }
 }
 
@@ -1175,6 +1217,12 @@ impl MsixCfg {
             masked: ent.mask_vec || ent.mask_func,
             pending: ent.pending,
         }
+    }
+    fn reset(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.enabled = false;
+        state.func_mask = false;
+        self.each_entry(|ent| ent.reset());
     }
 }
 

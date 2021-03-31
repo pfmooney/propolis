@@ -7,6 +7,7 @@ extern crate serde;
 extern crate serde_derive;
 extern crate toml;
 
+use std::any::Any;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read, Result};
 use std::path::Path;
@@ -82,6 +83,10 @@ fn open_bootrom(path: &str) -> Result<(File, usize)> {
     }
 }
 
+struct InstInfo {
+    chipset_id: inventory::EntityID,
+}
+
 fn main() {
     // Ensure proper setup of USDT probes
     register_probes().unwrap();
@@ -97,6 +102,8 @@ fn main() {
 
     let (mut romfp, rom_len) = open_bootrom(config.get_bootrom()).unwrap();
     let com1_sock = chardev::UDSock::bind(Path::new("./ttya")).unwrap();
+
+    let mut init_info: Option<InstInfo> = None;
 
     let _res = inst.initialize(|machine, mctx, disp, inv| {
         machine.populate_rom("bootrom", |ptr, region_len| {
@@ -122,6 +129,9 @@ fn main() {
         let hdl = machine.get_hdl();
         let chipset = hw::chipset::i440fx::I440Fx::create(Arc::clone(&hdl));
         chipset.attach(mctx);
+
+        let chipset_id =
+            inv.register(Arc::clone(&chipset), "chipset".to_string());
 
         // UARTs
         let com1 = LpcUart::new(chipset.irq_pin(ibmpc::IRQ_COM1).unwrap());
@@ -236,15 +246,9 @@ fn main() {
         for id in 0..ncpu {
             let mut vcpu = machine.vcpu(id);
             vcpu.set_default_capabs().unwrap();
-            vcpu.reboot_state().unwrap();
-            vcpu.activate().unwrap();
-            // Set BSP to start up
-            if id == 0 {
-                vcpu.set_run_state(bhyve_api::VRS_RUN).unwrap();
-                vcpu.set_reg(bhyve_api::vm_reg_name::VM_REG_GUEST_RIP, 0xfff0)
-                    .unwrap();
-            }
         }
+
+        init_info = Some(InstInfo { chipset_id });
 
         Ok(())
     });
@@ -256,8 +260,37 @@ fn main() {
     // Wait until someone connects to ttya
     com1_sock.wait_for_connect();
 
-    inst.on_transition(Box::new(|next_state| {
-        println!("state cb: {:?}", next_state);
+    let info = Arc::new(init_info.unwrap());
+    let cb_info = Arc::clone(&info);
+
+    inst.on_transition(Box::new(move |next_state, _inv, ctx| {
+        match next_state {
+            State::Boot => {
+                // BAR placement, etc
+                chipset.boot_setup(ctx);
+
+                let ncpu = ctx.mctx.max_cpus();
+                for id in 0..ncpu {
+                    ctx.mctx.with_vcpu(id, |vcpu| {
+                        vcpu.reboot_state().unwrap();
+                        vcpu.activate().unwrap();
+
+                        // Set BSP to start up
+                        if id == 0 {
+                            vcpu.set_run_state(bhyve_api::VRS_RUN).unwrap();
+                            vcpu.set_reg(
+                                bhyve_api::vm_reg_name::VM_REG_GUEST_RIP,
+                                0xfff0,
+                            )
+                            .unwrap();
+                        }
+                    });
+                }
+            }
+            s => {
+                println!("state cb: {:?}", s);
+            }
+        }
     }));
     inst.set_target_state(State::Run).unwrap();
 
