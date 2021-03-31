@@ -266,25 +266,21 @@ fn main() {
     inst.on_transition(Box::new(move |next_state, _inv, ctx| {
         match next_state {
             State::Boot => {
-                // BAR placement, etc
-                chipset.boot_setup(ctx);
-
                 let ncpu = ctx.mctx.max_cpus();
                 for id in 0..ncpu {
-                    ctx.mctx.with_vcpu(id, |vcpu| {
-                        vcpu.reboot_state().unwrap();
-                        vcpu.activate().unwrap();
+                    let mut vcpu = ctx.mctx.vcpu(id);
+                    vcpu.reboot_state().unwrap();
+                    vcpu.activate().unwrap();
 
-                        // Set BSP to start up
-                        if id == 0 {
-                            vcpu.set_run_state(bhyve_api::VRS_RUN).unwrap();
-                            vcpu.set_reg(
-                                bhyve_api::vm_reg_name::VM_REG_GUEST_RIP,
-                                0xfff0,
-                            )
-                            .unwrap();
-                        }
-                    });
+                    // Set BSP to start up
+                    if id == 0 {
+                        vcpu.set_run_state(bhyve_api::VRS_RUN).unwrap();
+                        vcpu.set_reg(
+                            bhyve_api::vm_reg_name::VM_REG_GUEST_RIP,
+                            0xfff0,
+                        )
+                        .unwrap();
+                    }
                 }
             }
             s => {

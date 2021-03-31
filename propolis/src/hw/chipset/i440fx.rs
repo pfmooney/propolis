@@ -76,12 +76,11 @@ impl I440Fx {
             pm.attach(mctx);
         });
 
-        mctx.with_pio(|pio| {
-            let cfg_pio = self.self_weak() as Weak<dyn PioDev>;
-            let cfg_pio2 = Weak::clone(&cfg_pio);
-            pio.register(pci::PORT_PCI_CONFIG_ADDR, 4, cfg_pio, 0).unwrap();
-            pio.register(pci::PORT_PCI_CONFIG_DATA, 4, cfg_pio2, 0).unwrap();
-        });
+        let pio = mctx.pio();
+        let cfg_pio = self.self_weak() as Weak<dyn PioDev>;
+        let cfg_pio2 = Weak::clone(&cfg_pio);
+        pio.register(pci::PORT_PCI_CONFIG_ADDR, 4, cfg_pio, 0).unwrap();
+        pio.register(pci::PORT_PCI_CONFIG_DATA, 4, cfg_pio2, 0).unwrap();
     }
 
     fn set_lnk_route(&self, idx: usize, irq: Option<u8>) {

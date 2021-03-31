@@ -139,30 +139,27 @@ impl Instance {
     }
 
     fn transition_cb(&self, state: &MutexGuard<InnerState>, next_state: State) {
-        state.disp.with_ctx(|ctx| {
-            for func in state.transition_funcs.iter() {
-                func(next_state, &state.inv, ctx)
-            }
-        });
+        let ctx = state.disp.ctx();
+        for func in state.transition_funcs.iter() {
+            func(next_state, &state.inv, &ctx)
+        }
     }
     fn inventory_quiesce(&self, state: &MutexGuard<InnerState>) {
         assert_eq!(state.current, State::Quiesce);
-        state.disp.with_ctx(|ctx| {
-            state.inv.iter_over(|iter| {
-                for ent in iter {
-                    ent.quiesce(ctx);
-                }
-            });
+        let ctx = state.disp.ctx();
+        state.inv.iter_over(|iter| {
+            for ent in iter {
+                ent.quiesce(&ctx);
+            }
         });
     }
     fn inventory_reset(&self, state: &MutexGuard<InnerState>) {
         assert_eq!(state.current, State::Quiesce);
-        state.disp.with_ctx(|ctx| {
-            state.inv.iter_over(|iter| {
-                for ent in iter {
-                    ent.reset(ctx);
-                }
-            });
+        let ctx = state.disp.ctx();
+        state.inv.iter_over(|iter| {
+            for ent in iter {
+                ent.reset(&ctx);
+            }
         });
     }
 
