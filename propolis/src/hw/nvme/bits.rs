@@ -28,8 +28,11 @@ pub(super) struct RawSubmission {
     pub cdw15: u32,
 }
 impl RawSubmission {
-    pub unsafe fn read_raw(ptr: *const u8) -> Self {
-        read_raw(ptr)
+    pub fn cid(&self) -> u16 {
+        (self.cdw0 >> 16) as u16
+    }
+    pub fn opcode(&self) -> u8 {
+        self.cdw0 as u8
     }
 }
 
@@ -42,11 +45,6 @@ pub(super) struct RawCompletion {
     pub sqid: u16,
     pub cid: u16,
     pub status: u16,
-}
-impl RawCompletion {
-    pub unsafe fn read_raw(ptr: *const u8) -> Self {
-        read_raw(ptr)
-    }
 }
 
 // Register bits

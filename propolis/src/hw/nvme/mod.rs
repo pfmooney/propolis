@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::common::*;
 use crate::dispatch::DispCtx;
@@ -11,20 +11,23 @@ mod bits;
 mod queue;
 
 use bits::*;
+use queue::{CompQueue, SubQueue};
 
 #[derive(Default)]
 struct CtrlState {
     enabled: bool,
     ready: bool,
-    admin_subq_base: u64,
-    admin_compq_base: u64,
-    admin_subq_size: u16,
-    admin_compq_size: u16,
+    admin_sq_base: u64,
+    admin_cq_base: u64,
+    admin_sq_size: u16,
+    admin_cq_size: u16,
 }
 
 #[derive(Default)]
 struct NvmeState {
     ctrl: CtrlState,
+    admin_sq: Option<SubQueue>,
+    admin_cq: Option<CompQueue>,
 }
 
 #[derive(Default)]
@@ -55,7 +58,7 @@ impl PciNvme {
             .finish(Arc::new(PciNvme::default()))
     }
 
-    fn ctrlr_cfg_write(&self, val: u32) {
+    fn ctrlr_cfg_write(&self, val: u32, ctx: &DispCtx) {
         let mut state = self.state.lock().unwrap();
 
         if !state.ctrl.enabled {
@@ -65,10 +68,23 @@ impl PciNvme {
         let now_enabled = val & CC_EN != 0;
         if now_enabled && !state.ctrl.enabled {
             state.ctrl.enabled = true;
-            // TODO: actual enabling
-            //
-            // - setup admin queues
-            //
+
+            let admin_sq = SubQueue::new(
+                state.ctrl.admin_sq_size as u32,
+                GuestAddr(state.ctrl.admin_sq_base),
+                ctx,
+            );
+            let admin_cq = CompQueue::new(
+                state.ctrl.admin_cq_size as u32,
+                GuestAddr(state.ctrl.admin_cq_base),
+                ctx,
+            );
+
+            if admin_sq.is_some() && admin_cq.is_some() {
+                state.admin_sq = admin_sq;
+                state.admin_cq = admin_cq;
+                state.ctrl.ready = true;
+            }
         } else if !now_enabled && state.ctrl.enabled {
             state.ctrl.enabled = false;
             state.ctrl.ready = false;
@@ -89,8 +105,6 @@ impl PciNvme {
             // reset operation.
         }
     }
-}
-impl PciNvme {
     fn reg_ctrl_read(&self, id: &CtrlrReg, ro: &mut ReadOp, _ctx: &DispCtx) {
         match id {
             CtrlrReg::CtrlrCaps => {
@@ -131,29 +145,32 @@ impl PciNvme {
             CtrlrReg::AdminQueueAttr => {
                 let state = self.state.lock().unwrap();
                 ro.write_u32(
-                    state.ctrl.admin_subq_size as u32
-                        | (state.ctrl.admin_compq_size as u32) << 16,
+                    state.ctrl.admin_sq_size as u32
+                        | (state.ctrl.admin_cq_size as u32) << 16,
                 );
             }
             CtrlrReg::AdminSubQAddr => {
                 let state = self.state.lock().unwrap();
-                ro.write_u64(state.ctrl.admin_subq_base);
+                ro.write_u64(state.ctrl.admin_sq_base);
             }
             CtrlrReg::AdminCompQAddr => {
                 let state = self.state.lock().unwrap();
-                ro.write_u64(state.ctrl.admin_compq_base);
+                ro.write_u64(state.ctrl.admin_cq_base);
             }
             CtrlrReg::Reserved => {
                 ro.fill(0);
             }
-            CtrlrReg::DoorBellSubQ0 | CtrlrReg::DoorBellCompQ0 => {
+            CtrlrReg::DoorBellAdminSQ
+            | CtrlrReg::DoorBellAdminCQ
+            | CtrlrReg::DoorBellIoSQ0
+            | CtrlrReg::DoorBellIoCQ0 => {
                 // The host should not read from the doorbells, and the contents
                 // can be vendor/implementation specific (in our case, zeroed).
                 ro.fill(0);
             }
         }
     }
-    fn reg_ctrl_write(&self, id: &CtrlrReg, wo: &mut WriteOp, _ctx: &DispCtx) {
+    fn reg_ctrl_write(&self, id: &CtrlrReg, wo: &mut WriteOp, ctx: &DispCtx) {
         match id {
             CtrlrReg::CtrlrCaps
             | CtrlrReg::Version
@@ -166,7 +183,7 @@ impl PciNvme {
             }
 
             CtrlrReg::CtrlrCfg => {
-                self.ctrlr_cfg_write(wo.read_u32());
+                self.ctrlr_cfg_write(wo.read_u32(), ctx);
             }
             CtrlrReg::AdminQueueAttr => {
                 let mut state = self.state.lock().unwrap();
@@ -177,32 +194,60 @@ impl PciNvme {
                     // bits 27:16 - ASQS, zeroes-based
                     let subq: u16 = (val & 0xfff) as u16 + 1;
 
-                    state.ctrl.admin_compq_size = compq;
-                    state.ctrl.admin_subq_size = subq;
+                    state.ctrl.admin_cq_size = compq;
+                    state.ctrl.admin_sq_size = subq;
                 }
             }
             CtrlrReg::AdminSubQAddr => {
                 let mut state = self.state.lock().unwrap();
                 if !state.ctrl.enabled {
-                    state.ctrl.admin_subq_base =
-                        wo.read_u64() & PAGE_MASK as u64;
+                    state.ctrl.admin_sq_base = wo.read_u64() & PAGE_MASK as u64;
                 }
             }
             CtrlrReg::AdminCompQAddr => {
                 let mut state = self.state.lock().unwrap();
                 if !state.ctrl.enabled {
-                    state.ctrl.admin_compq_base =
-                        wo.read_u64() & PAGE_MASK as u64;
+                    state.ctrl.admin_cq_base = wo.read_u64() & PAGE_MASK as u64;
                 }
             }
 
-            CtrlrReg::DoorBellSubQ0 => {
-                todo!("ring admin subq doorbell");
+            CtrlrReg::DoorBellAdminSQ => {
+                let val = wo.read_u16();
+                let mut state = self.state.lock().unwrap();
+                if let Some(sq) = state.admin_sq.as_ref() {
+                    match sq.notify_tail(val) {
+                        Ok(_) => {}
+                        Err(_) => todo!("set controller error state"),
+                    }
+                    self.process_admin_queue(state, ctx);
+                }
             }
-            CtrlrReg::DoorBellCompQ0 => {
-                todo!("ring admin compq doorbell");
+            CtrlrReg::DoorBellAdminCQ => {
+                let val = wo.read_u16();
+                let mut state = self.state.lock().unwrap();
+                if let Some(sq) = state.admin_cq.as_ref() {
+                    match sq.notify_head(val) {
+                        Ok(_) => {}
+                        Err(_) => todo!("set controller error state"),
+                    }
+                    self.process_admin_queue(state, ctx);
+                }
+            }
+            CtrlrReg::DoorBellIoSQ0 => {
+                todo!("ring IO sq doorbell");
+            }
+            CtrlrReg::DoorBellIoCQ0 => {
+                todo!("ring IO cq doorbell");
             }
         }
+    }
+
+    fn process_admin_queue(&self, state: MutexGuard<NvmeState>, ctx: &DispCtx) {
+        if let Some(sq) = state.admin_sq.as_ref() {
+            while let Some(sub) = sq.pop(ctx) {
+            }
+        }
+        // TODO: process new entries
     }
 }
 
@@ -225,6 +270,14 @@ impl pci::Device for PciNvme {
     }
 }
 
+struct SQConfig {
+    pub queue: SubQueue,
+    pub cq_id: u16,
+}
+struct CQConfig {
+    pub assoc_sq_ids: Vec<u16>,
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum CtrlrReg {
     CtrlrCaps,
@@ -238,11 +291,14 @@ enum CtrlrReg {
     AdminCompQAddr,
     Reserved,
 
-    // XXX: single doorbell for prototype
-    DoorBellSubQ0,
-    DoorBellCompQ0,
+    DoorBellAdminSQ,
+    DoorBellAdminCQ,
+
+    // XXX: single IO doorbell for prototype
+    DoorBellIoSQ0,
+    DoorBellIoCQ0,
 }
-// XXX: single doorbell for prototype
+// XXX: single IO doorbell for prototype
 const CONTROLLER_REG_SZ: usize = 0x2000;
 lazy_static! {
     static ref CONTROLLER_REGS: RegMap<CtrlrReg> = {
@@ -260,11 +316,14 @@ lazy_static! {
             (CtrlrReg::AdminCompQAddr, 8),
             (CtrlrReg::Reserved, 0xec8),
             (CtrlrReg::Reserved, 0x100),
-            // XXX: hardcode a single doorbell with 0 stride for now
-            (CtrlrReg::DoorBellSubQ0, 4),
-            (CtrlrReg::DoorBellCompQ0, 4),
+            // XXX: hardcode 0 stride for doorbells
+            (CtrlrReg::DoorBellAdminSQ, 4),
+            (CtrlrReg::DoorBellAdminCQ, 4),
+            // XXX: hardcode a single IO doorbell
+            (CtrlrReg::DoorBellIoSQ0, 4),
+            (CtrlrReg::DoorBellIoCQ0, 4),
             // XXX: pad out to next power of 2
-            (CtrlrReg::Reserved, 0x1000 - 8),
+            (CtrlrReg::Reserved, 0x1000 - 16),
         ];
         RegMap::create_packed(
             CONTROLLER_REG_SZ,
