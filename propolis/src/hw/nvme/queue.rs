@@ -155,7 +155,7 @@ impl SubQueue {
         let queue_size =
             size as usize * std::mem::size_of::<bits::RawSubmission>();
         let memctx = ctx.mctx.memctx();
-        let region = memctx.raw_readable(&GuestRegion(base, queue_size));
+        let region = memctx.readable_region(&GuestRegion(base, queue_size));
 
         region.is_some()
     }
@@ -201,7 +201,7 @@ impl CompQueue {
         let queue_size =
             size as usize * std::mem::size_of::<bits::RawSubmission>();
         let memctx = ctx.mctx.memctx();
-        let region = memctx.raw_writable(&GuestRegion(base, queue_size));
+        let region = memctx.writable_region(&GuestRegion(base, queue_size));
 
         region.is_some()
     }
