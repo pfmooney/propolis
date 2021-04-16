@@ -2,7 +2,7 @@
 
 use std::sync::Mutex;
 
-use super::bits::{self, RawSubmission};
+use super::bits::{self, RawSubmission, RawCompletion};
 use crate::common::*;
 use crate::dispatch::DispCtx;
 
@@ -176,6 +176,20 @@ impl CompQueue {
     pub fn notify_head(&self, idx: u16) -> Result<(), &'static str> {
         let mut state = self.state.lock().unwrap();
         state.pop_head_to(idx)
+    }
+    pub fn push(&self, entry: RawCompletion, ctx: &DispCtx) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(idx) = state.push_tail() {
+            let mem = ctx.mctx.memctx();
+            let addr = self.entry_addr(idx);
+            mem.write(addr, &entry);
+            // XXX: handle a guest addr that becomes unmapped later
+            // XXX: figure out interrupts
+        }
+    }
+    fn entry_addr(&self, idx: u16) -> GuestAddr {
+        let res = self.base.0 + idx as u64 * std::mem::size_of::<RawCompletion>() as u64;
+        GuestAddr(res)
     }
     fn validate(base: GuestAddr, size: u32, ctx: &DispCtx) -> bool {
         if (base.0 & PAGE_OFFSET as u64) != 0 {

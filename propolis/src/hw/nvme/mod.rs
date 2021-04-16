@@ -1,3 +1,4 @@
+use std::mem::size_of;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::common::*;
@@ -8,6 +9,7 @@ use crate::util::regmap::RegMap;
 use lazy_static::lazy_static;
 
 mod bits;
+mod cmds;
 mod queue;
 
 use bits::*;
@@ -245,9 +247,77 @@ impl PciNvme {
     fn process_admin_queue(&self, state: MutexGuard<NvmeState>, ctx: &DispCtx) {
         if let Some(sq) = state.admin_sq.as_ref() {
             while let Some(sub) = sq.pop(ctx) {
+                use cmds::AdminCmd;
+
+                let parsed = AdminCmd::parse(sub);
+                if parsed.is_err() {
+                    // XXX: set controller error state?
+                    continue;
+                }
+                let (cmd, entry) = parsed.unwrap();
+                match cmd {
+                    AdminCmd::DeleteIOSubQ(_qid) => {}
+                    AdminCmd::CreateIOSubQ(_) => {}
+                    AdminCmd::GetLogPage(_) => {}
+                    AdminCmd::DeleteIOCompQ(_qid) => {}
+                    AdminCmd::CreateIOCompQ(_) => {}
+                    AdminCmd::Identify(cmd) => {
+                        self.acmd_identify(&cmd, &state, ctx);
+                    }
+                    AdminCmd::Abort => {}
+                    AdminCmd::SetFeatures => {}
+                    AdminCmd::GetFeatures => {}
+                    AdminCmd::AsyncEventReq => {}
+                    AdminCmd::Unknown(_) => {}
+                }
             }
         }
         // TODO: process new entries
+    }
+    fn acmd_identify(
+        &self,
+        cmd: &cmds::IdentifyCmd,
+        state: &MutexGuard<NvmeState>,
+        ctx: &DispCtx,
+    ) -> cmds::Completion {
+        match cmd.cns {
+            IDENT_CNS_NAMESPACE => match cmd.nsid {
+                0 => {
+                    todo!("provide info about ns");
+                    cmds::Completion::success()
+                }
+                0xffffffff => {
+                    todo!("fail with invalid NS");
+                }
+                _ => {
+                    todo!("zero the page");
+                    cmds::Completion::success()
+                }
+            },
+            IDENT_CNS_CONTROLLER => {
+                let ident = bits::IdentifyController {
+                    // TODO: fill out serial number
+                    sqes: size_of::<bits::RawSubmission>() as u8,
+                    cqes: size_of::<bits::RawCompletion>() as u8,
+                    // hardcode a single namespace for now
+                    nn: 1,
+                    // bit 0 indicates volatile write cache is present
+                    vwc: 1,
+                    ..Default::default()
+                };
+                todo!("write results");
+                cmds::Completion::success()
+            }
+            IDENT_CNS_ACTIVE_NSID => {
+                todo!("active nsid");
+                cmds::Completion::success()
+            }
+            IDENT_CNS_NSID_DESC => {
+                todo!("nsid desc");
+                cmds::Completion::success()
+            }
+            _ => cmds::Completion::generic_err(bits::STS_INVAL_FIELD),
+        }
     }
 }
 
@@ -331,50 +401,4 @@ lazy_static! {
             Some(CtrlrReg::Reserved),
         )
     };
-}
-
-enum AdminCmd {
-    DeleteIoSubQ,
-    CreateIoSubQ,
-    GetLogPage,
-    DeleteIoCompQ,
-    CreateIoCompQ,
-    Identify,
-    Abort,
-    SetFeatures,
-    GetFeatures,
-    AsyncEventReq,
-}
-impl AdminCmd {
-    const fn from_opcode(opcode: u8) -> Option<Self> {
-        match opcode {
-            0x0 => Some(AdminCmd::DeleteIoSubQ),
-            0x1 => Some(AdminCmd::CreateIoSubQ),
-            0x2 => Some(AdminCmd::GetLogPage),
-            0x4 => Some(AdminCmd::DeleteIoCompQ),
-            0x5 => Some(AdminCmd::CreateIoCompQ),
-            0x6 => Some(AdminCmd::Identify),
-            0x8 => Some(AdminCmd::Abort),
-            0x9 => Some(AdminCmd::SetFeatures),
-            0xa => Some(AdminCmd::GetFeatures),
-            0xc => Some(AdminCmd::AsyncEventReq),
-            _ => None,
-        }
-    }
-}
-
-enum NvmCmd {
-    Flush,
-    Write,
-    Read,
-}
-impl NvmCmd {
-    const fn from_opcode(opcode: u8) -> Option<Self> {
-        match opcode {
-            0x0 => Some(NvmCmd::Flush),
-            0x1 => Some(NvmCmd::Write),
-            0x2 => Some(NvmCmd::Read),
-            _ => None,
-        }
-    }
 }
