@@ -1,3 +1,5 @@
+#![allow(non_camel_case_types)]
+
 use std::os::raw::{c_int, c_uint, c_void};
 
 use bitflags::bitflags;
@@ -378,4 +380,18 @@ impl vm_destroy_req {
         copy_name(&mut res.name, name);
         res
     }
+}
+
+pub const VDX_FLAG_READ_COPYIN: u32 = 1 << 0;
+pub const VDX_FLAG_WRITE_COPYOUT: u32 = 1 << 1;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct vm_data_xfer {
+    pub vdx_vcpuid: c_int,
+    pub vdx_class: u16,
+    pub vdx_version: u16,
+    pub vdx_flags: u32,
+    pub vdx_len: u32,
+    pub vdx_data: *mut c_void,
 }
