@@ -31,8 +31,8 @@ pub use device::*;
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Ord, PartialOrd)]
 pub struct BusNum(u8);
 impl BusNum {
-    pub const fn new(n: u8) -> Option<Self> {
-        Some(Self(n))
+    pub const fn new(n: u8) -> Self {
+        Self(n)
     }
     pub const fn get(&self) -> u8 {
         self.0
@@ -48,6 +48,13 @@ impl DevNum {
             None
         }
     }
+    pub const fn new_unchecked(n: u8) -> Self {
+        if n <= bits::MASK_DEV {
+            Self(n)
+        } else {
+            panic!("device number exceeds max");
+        }
+    }
     pub const fn get(&self) -> u8 {
         self.0
     }
@@ -60,6 +67,13 @@ impl FuncNum {
             Some(Self(n))
         } else {
             None
+        }
+    }
+    pub const fn new_unchecked(n: u8) -> Self {
+        if n <= bits::MASK_FUNC {
+            Self(n)
+        } else {
+            panic!("function number exceeds max");
         }
     }
     pub const fn get(&self) -> u8 {
@@ -81,6 +95,13 @@ impl BusLocation {
         match (dnum, fnum) {
             (Some(d), Some(f)) => Some(Self { dev: d, func: f }),
             _ => None,
+        }
+    }
+
+    pub const fn new_unchecked(dev: u8, func: u8) -> Self {
+        Self {
+            dev: DevNum::new_unchecked(dev),
+            func: FuncNum::new_unchecked(func),
         }
     }
 }
@@ -150,11 +171,16 @@ impl Bdf {
     pub const fn new(bus: u8, dev: u8, func: u8) -> Option<Self> {
         // Until the `?` operator is supported in `const fn`s, this more verbose
         // implementation is required.
-        let bnum = BusNum::new(bus);
-        let loc = BusLocation::new(dev, func);
-        match (bnum, loc) {
-            (Some(b), Some(l)) => Some(Self { bus: b, location: l }),
-            _ => None,
+        if let Some(location) = BusLocation::new(dev, func) {
+            Some(Self { bus: BusNum::new(bus), location })
+        } else {
+            None
+        }
+    }
+    pub const fn new_unchecked(bus: u8, dev: u8, func: u8) -> Self {
+        Self {
+            bus: BusNum::new(bus),
+            location: BusLocation::new_unchecked(dev, func),
         }
     }
 }
