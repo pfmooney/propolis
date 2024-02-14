@@ -192,10 +192,8 @@ impl<'a> MachineInitializer<'a> {
             );
             pci_builder.add_bridge(desc)?;
         }
-        let pci::topology::FinishedTopology {
-            topology: pci_topology,
-            bridges: _bridges,
-        } = pci_builder.finish(self.machine)?;
+        let pci::topology::FinishedTopology { topology: pci_topology, bridges } =
+            pci_builder.finish(self.machine)?;
 
         match self.spec.devices.board.chipset {
             instance_spec::components::board::Chipset::I440Fx(i440fx) => {
@@ -262,6 +260,14 @@ impl<'a> MachineInitializer<'a> {
                     chipset_lpc.clone(),
                 );
                 self.devices.insert(chipset_pm.type_name().into(), chipset_pm);
+
+                // Record attachment for any bridges in PCI topology too
+                for (bdf, bridge) in bridges {
+                    self.devices.insert(
+                        format!("{}-{bdf}", bridge.type_name()),
+                        bridge,
+                    );
+                }
 
                 Ok(RegisteredChipset { chipset: chipset_hb, isa: chipset_lpc })
             }
