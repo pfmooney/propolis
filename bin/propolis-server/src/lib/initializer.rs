@@ -544,7 +544,7 @@ impl<'a> MachineInitializer<'a> {
                         ),
                     );
                     self.devices
-                        .insert(format!("pci-nvme-{}", bdf), nvme.clone());
+                        .insert(format!("pci-nvme-{bdf}"), nvme.clone());
                     block::attach(backend, nvme.clone());
                     chipset.pci_attach(bdf, nvme);
                 }
