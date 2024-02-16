@@ -118,12 +118,14 @@ impl AdminCmd {
             bits::ADMIN_OPC_SET_FEATURES => {
                 AdminCmd::SetFeatures(SetFeaturesCmd {
                     fid: FeatureIdent::from(raw.cdw10 as u8),
+                    nsid: raw.nsid,
                     cdw11: raw.cdw11,
                 })
             }
             bits::ADMIN_OPC_GET_FEATURES => {
                 AdminCmd::GetFeatures(GetFeaturesCmd {
                     fid: FeatureIdent::from(raw.cdw10 as u8),
+                    nsid: raw.nsid,
                     cdw11: raw.cdw11,
                 })
             }
@@ -358,6 +360,11 @@ pub struct GetFeaturesCmd {
     /// The feature that attributes are being specified for.
     pub fid: FeatureIdent,
 
+    /// Namespace Identifier (NSID)
+    ///
+    /// The namespace that this command applies to.
+    pub nsid: u32,
+
     pub cdw11: u32,
 }
 
@@ -368,6 +375,11 @@ pub struct SetFeaturesCmd {
     ///
     /// The feature that attributes are being specified for.
     pub fid: FeatureIdent,
+
+    /// Namespace Identifier (NSID)
+    ///
+    /// The namespace that this command applies to.
+    pub nsid: u32,
 
     pub cdw11: u32,
 }
