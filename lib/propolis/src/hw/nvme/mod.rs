@@ -900,8 +900,24 @@ impl PciNvme {
                     state.acmd_get_log_page(&cmd, &mem)
                 }
                 AdminCmd::Identify(cmd) => state.acmd_identify(&cmd, &mem),
-                AdminCmd::GetFeatures(cmd) => state.acmd_get_features(&cmd),
-                AdminCmd::SetFeatures(cmd) => state.acmd_set_features(&cmd),
+                AdminCmd::GetFeatures(cmd) => {
+                    slog::info!(
+                        self.log,
+                        "NVME GetFeatures({:?}) nsid:{:#}",
+                        cmd.fid,
+                        cmd.nsid
+                    );
+                    state.acmd_get_features(&cmd)
+                }
+                AdminCmd::SetFeatures(cmd) => {
+                    slog::info!(
+                        self.log,
+                        "NVME SetFeatures({:?}) nsid:{:#}",
+                        cmd.fid,
+                        cmd.nsid
+                    );
+                    state.acmd_set_features(&cmd)
+                }
                 AdminCmd::DeleteIOCompQ(cqid) => state.acmd_delete_io_cq(cqid),
                 AdminCmd::DeleteIOSubQ(sqid) => state.acmd_delete_io_sq(sqid),
                 AdminCmd::AsyncEventReq => {
