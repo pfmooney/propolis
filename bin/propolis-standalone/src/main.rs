@@ -606,31 +606,40 @@ impl Instance {
                 Ok(exit) => exit,
             };
 
-            entry = vcpu.process_vmexit(&exit).unwrap_or_else(|| {
-                match exit.kind {
-                    VmExitKind::Inout(pio) => {
+            if let Some(processed_entry) = vcpu.process_vmexit(&exit) {
+                entry = processed_entry;
+                continue;
+            }
+            entry = match exit.kind {
+                VmExitKind::Inout(pio) => {
+                    if inner.config.main.unhandled_pio.should_log() {
                         slog::error!(
                             &log,
                             "Unhandled pio {:x?}", pio; "rip" => exit.rip
                         );
-                        VmEntry::InoutFulfill(exits::InoutRes::emulate_failed(
-                            &pio,
-                        ))
                     }
-                    VmExitKind::Mmio(mmio) => {
+                    VmEntry::InoutFulfill(exits::InoutRes::emulate_failed(&pio))
+                }
+                VmExitKind::Mmio(mmio) => {
+                    if inner.config.main.unhandled_mmio.should_log() {
                         slog::error!(
                             &log,
                             "Unhandled mmio {:x?}", mmio; "rip" => exit.rip
                         );
-                        VmEntry::MmioFulfill(exits::MmioRes::emulate_failed(
-                            &mmio,
-                        ))
                     }
-                    VmExitKind::Rdmsr(msr) => {
+                    VmEntry::MmioFulfill(exits::MmioRes::emulate_failed(&mmio))
+                }
+                VmExitKind::Rdmsr(msr) => {
+                    let unhandled_msr = inner.config.main.unhandled_msr;
+                    if unhandled_msr.should_log() {
                         slog::error!(
                             &log,
                             "Unhandled rdmsr {:#08x}", msr; "rip" => exit.rip
                         );
+                    }
+                    if unhandled_msr.should_reject() {
+                        vcpu.inject_gp().unwrap()
+                    } else {
                         let _ = vcpu.set_reg(
                             bhyve_api::vm_reg_name::VM_REG_GUEST_RAX,
                             0,
@@ -639,53 +648,53 @@ impl Instance {
                             bhyve_api::vm_reg_name::VM_REG_GUEST_RDX,
                             0,
                         );
-                        VmEntry::Run
                     }
-                    VmExitKind::Wrmsr(msr, val) => {
+                    VmEntry::Run
+                }
+                VmExitKind::Wrmsr(msr, val) => {
+                    let unhandled_msr = inner.config.main.unhandled_msr;
+                    if unhandled_msr.should_log() {
                         slog::error!(
                             &log,
                             "Unhandled wrmsr {:#08x} <- {:#08x}", msr, val;
                             "rip" => #%exit.rip
                         );
-                        VmEntry::Run
                     }
-                    VmExitKind::Suspended(SuspendDetail {
-                        kind,
-                        when: _when,
-                    }) => {
-                        match kind {
-                            exits::Suspend::Halt | exits::Suspend::Reset => {
+                    if unhandled_msr.should_reject() {
+                        vcpu.inject_gp().unwrap()
+                    }
+                    VmEntry::Run
+                }
+                VmExitKind::Suspended(SuspendDetail { kind, when: _when }) => {
+                    match kind {
+                        exits::Suspend::Halt | exits::Suspend::Reset => {
+                            inner.eq.push(kind.into(), EventCtx::Vcpu(vcpu.id));
+                        }
+                        exits::Suspend::TripleFault(vcpuid) => {
+                            if vcpuid == -1 || vcpuid == vcpu.id {
                                 inner
                                     .eq
                                     .push(kind.into(), EventCtx::Vcpu(vcpu.id));
                             }
-                            exits::Suspend::TripleFault(vcpuid) => {
-                                if vcpuid == -1 || vcpuid == vcpu.id {
-                                    inner.eq.push(
-                                        kind.into(),
-                                        EventCtx::Vcpu(vcpu.id),
-                                    );
-                                }
-                            }
                         }
-                        task.force_hold();
+                    }
+                    task.force_hold();
 
-                        // The next entry is unimportant as we have queued a
-                        // significant event and halted this vCPU task with the
-                        // expectation that it will be acted upon soon.
-                        VmEntry::Run
-                    }
-                    _ => {
-                        slog::error!(
-                            &log,
-                            "Unhandled exit @rip:{:08x} {:?}",
-                            exit.rip,
-                            exit.kind
-                        );
-                        todo!()
-                    }
+                    // The next entry is unimportant as we have queued a
+                    // significant event and halted this vCPU task with the
+                    // expectation that it will be acted upon soon.
+                    VmEntry::Run
                 }
-            });
+                _ => {
+                    slog::error!(
+                        &log,
+                        "Unhandled exit @rip:{:08x} {:?}",
+                        exit.rip,
+                        exit.kind
+                    );
+                    todo!()
+                }
+            };
         }
     }
 
@@ -995,6 +1004,71 @@ fn generate_bootorder(config: &config::Config) -> anyhow::Result<fwcfg::Entry> {
         }
     }
     Ok(order.finish())
+}
+
+fn generate_msrs(log: &slog::Logger) -> propolis::vcpu::msrs::Msrs {
+    use propolis::cpuid::VendorKind;
+    use propolis::vcpu::msrs::Entry as MsrEntry;
+    let mut msrs = propolis::vcpu::msrs::Msrs::new();
+
+    match VendorKind::from_host() {
+        Some(VendorKind::Amd) => {
+            // MSR_IA32_UCODE_REV / AMD_REV
+            msrs.set(0x8b, MsrEntry::Ignore);
+            // MSR_K7_HWCR
+            msrs.set(0xc001_0015, MsrEntry::Ignore);
+            // MSR_K7_EVNTSEL0-3, MSR_K7_PERFCTR0-3
+            for v in 0xc001_0000..=0xc001_0007 {
+                msrs.set(v, MsrEntry::Ignore);
+            }
+            // MSR_AMD64_NB_CFG
+            msrs.set(0xc001_001f, MsrEntry::Ignore);
+
+            // MSR_AMD64_LS_CFG
+            //
+            // Linux uses this for SSDB in the absence of the more traditional SPEC_CTRL
+            // methods, since those are not (currently) exposed.
+            msrs.set(0xc001_1020, MsrEntry::Ignore);
+
+            // MSR_K8_TSEG_ADDR
+            msrs.set(0xc001_0112, MsrEntry::Ignore);
+
+            // MSR_F17H_IRPERF
+            msrs.set(0xc000_00e9, MsrEntry::Ignore);
+
+            // MSR_AMD_RAPL_POWER_UNIT
+            msrs.set(0xc001_0299, MsrEntry::Ignore);
+
+            // MSR_AMD_PKG_ENERGY_STATUS
+            msrs.set(0xc001_029b, MsrEntry::Ignore);
+        }
+        Some(VendorKind::Intel) => {
+            // MSR_IA32_PLATFORM_ID
+            msrs.set(0x17, MsrEntry::Ignore);
+
+            // MSR_IA32_UCODE_REV / AMD_REV
+            msrs.set(0x8b, MsrEntry::Ignore);
+
+            // PPIN
+            msrs.set(0x4e, MsrEntry::Ignore);
+
+            // MSR_ERROR_CONTROL
+            msrs.set(0x17f, MsrEntry::Ignore);
+
+            // MSR_MISC_FEATURES_ENABLES
+            msrs.set(0x140, MsrEntry::Ignore);
+
+            // MSR_SMI_COUNT
+            msrs.set(0x34, MsrEntry::Ignore);
+
+            // MSR_AMD_DE_CFG
+            msrs.set(0xc0011029, MsrEntry::Ignore);
+        }
+        None => {
+            slog::error!(log, "could not determine vendor from host CPU");
+        }
+    }
+    msrs
 }
 
 fn setup_instance(
@@ -1321,6 +1395,8 @@ fn setup_instance(
     guard.inventory.register(&fwcfg);
     guard.inventory.register(&ramfb);
 
+    let msrs = generate_msrs(log);
+
     for vcpu in machine.vcpus.iter() {
         let vcpu_profile = if let Some(profile) = cpuid_profile.as_ref() {
             propolis::cpuid::Specializer::new()
@@ -1340,6 +1416,10 @@ fn setup_instance(
         };
         vcpu.set_cpuid(vcpu_profile)?;
         vcpu.set_default_capabs()?;
+
+        // setup MSR handling
+        let mut guard = vcpu.msrs.lock().unwrap();
+        *guard = msrs.clone();
     }
     drop(inst_guard);
 

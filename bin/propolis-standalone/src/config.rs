@@ -51,6 +51,17 @@ pub struct Main {
     pub memory: usize,
     pub use_reservoir: Option<bool>,
     pub cpuid_profile: Option<String>,
+
+    /// How should unhandled MSR accesses be treated
+    #[serde(default)]
+    pub unhandled_msr: UnhandledMsr,
+    /// How should unhandled PIO accesses be treated
+    #[serde(default)]
+    pub unhandled_pio: UnhandledIo,
+    /// How should unhandled MMIO accesses be treated
+    #[serde(default)]
+    pub unhandled_mmio: UnhandledIo,
+
     /// Process exitcode to emit if/when instance halts
     ///
     /// Default: 0
@@ -64,6 +75,36 @@ pub struct Main {
 
     /// Request bootrom override boot order using the devices specified
     pub boot_order: Option<Vec<String>>,
+}
+
+#[derive(Copy, Clone, Default, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnhandledMsr {
+    Ignore,
+    #[default]
+    Log,
+    Reject,
+}
+impl UnhandledMsr {
+    pub const fn should_log(&self) -> bool {
+        matches!(self, Self::Log)
+    }
+    pub const fn should_reject(&self) -> bool {
+        matches!(self, Self::Reject)
+    }
+}
+
+#[derive(Copy, Clone, Default, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnhandledIo {
+    Ignore,
+    #[default]
+    Log,
+}
+impl UnhandledIo {
+    pub const fn should_log(&self) -> bool {
+        matches!(self, Self::Log)
+    }
 }
 
 /// A hard-coded device, either enabled by default or accessible locally

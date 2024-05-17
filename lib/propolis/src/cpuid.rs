@@ -408,6 +408,10 @@ impl VendorKind {
     pub fn is_intel(self) -> bool {
         matches!(self, VendorKind::Intel)
     }
+    /// Attempt to determine vendor of host CPU via `cpuid` query
+    pub fn from_host() -> Option<Self> {
+        host_query(Ident(0x0, None)).try_into().ok()
+    }
 }
 impl TryFrom<Entry> for VendorKind {
     type Error = &'static str;

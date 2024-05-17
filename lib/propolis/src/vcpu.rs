@@ -5,7 +5,7 @@
 //! Virtual CPU functionality.
 
 use std::io::{Error, ErrorKind, Result};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::common::Lifecycle;
 use crate::cpuid;
@@ -38,6 +38,8 @@ pub struct Vcpu {
     pub id: i32,
     pub bus_mmio: Arc<MmioBus>,
     pub bus_pio: Arc<PioBus>,
+    // TODO: Properly migrate this state
+    pub msrs: Mutex<msrs::Msrs>,
 }
 
 impl Vcpu {
@@ -48,7 +50,13 @@ impl Vcpu {
         bus_mmio: Arc<MmioBus>,
         bus_pio: Arc<PioBus>,
     ) -> Arc<Self> {
-        Arc::new(Self { hdl, id, bus_mmio, bus_pio })
+        Arc::new(Self {
+            hdl,
+            id,
+            bus_mmio,
+            bus_pio,
+            msrs: Mutex::new(msrs::Msrs::new()),
+        })
     }
 
     /// ID of the virtual CPU.
@@ -373,6 +381,18 @@ impl Vcpu {
         unsafe { self.hdl.ioctl(bhyve_api::VM_INJECT_NMI, &mut vm_nmi) }
     }
 
+    /// Send a general protection fault (#GP) to the vcpu.
+    pub fn inject_gp(&self) -> Result<()> {
+        let mut vm_excp = bhyve_api::vm_exception {
+            cpuid: self.cpuid(),
+            vector: i32::from(bits::IDT_GP),
+            error_code: 0,
+            error_code_valid: 0,
+            restart_instruction: 1,
+        };
+        unsafe { self.hdl.ioctl(bhyve_api::VM_INJECT_EXCEPTION, &mut vm_excp) }
+    }
+
     /// Process [`VmExit`] in the context of this vCPU, emitting a [`VmEntry`]
     /// if the parameters of the exit were such that they could be handled.
     pub fn process_vmexit(&self, exit: &VmExit) -> Option<VmEntry> {
@@ -413,9 +433,33 @@ impl Vcpu {
                     })
                     .ok(),
             },
-            VmExitKind::Rdmsr(_) | VmExitKind::Wrmsr(_, _) => {
-                // Leave it to the caller to emulate MSRs unhandled by the kernel
-                None
+            VmExitKind::Rdmsr(msr) => {
+                let msrs = self.msrs.lock().unwrap();
+                match msrs.rdmsr(msr)? {
+                    msrs::ReadResult::Value(val) => {
+                        self.set_reg(
+                            bhyve_api::vm_reg_name::VM_REG_GUEST_RAX,
+                            u64::from(val as u32),
+                        )
+                        .unwrap();
+                        self.set_reg(
+                            bhyve_api::vm_reg_name::VM_REG_GUEST_RDX,
+                            val >> 32,
+                        )
+                        .unwrap();
+                    }
+                    msrs::ReadResult::Deny => {
+                        self.inject_gp().unwrap();
+                    }
+                }
+                Some(VmEntry::Run)
+            }
+            VmExitKind::Wrmsr(msr, val) => {
+                let mut msrs = self.msrs.lock().unwrap();
+                if let msrs::WriteResult::Deny = msrs.wrmsr(msr, val)? {
+                    self.inject_gp().unwrap();
+                }
+                Some(VmEntry::Run)
             }
             VmExitKind::Debug => {
                 // Until there is an interface to delay until a vCPU is no
@@ -492,6 +536,73 @@ impl MigrateMulti for Vcpu {
         cpuid.write(self)?;
 
         Ok(())
+    }
+}
+
+pub mod msrs {
+    use std::collections::BTreeMap;
+
+    #[derive(Clone, Copy)]
+    pub enum Entry {
+        /// Explicit deny (#GP) for operations on this MSR
+        Deny,
+        /// Ignore writes to this MSR and return 0s for all reads
+        Ignore,
+    }
+    impl Entry {
+        pub fn rdmsr(&self) -> ReadResult {
+            match self {
+                Entry::Deny => ReadResult::Deny,
+                Entry::Ignore => ReadResult::Value(0),
+            }
+        }
+        pub fn wrmsr(&mut self, _val: u64) -> WriteResult {
+            match self {
+                Entry::Deny => WriteResult::Deny,
+                Entry::Ignore => {
+                    // All writes accepted
+                    WriteResult::Accept
+                }
+            }
+        }
+    }
+
+    #[must_use]
+    #[derive(Copy, Clone)]
+    pub enum ReadResult {
+        /// Successful read of value
+        Value(u64),
+        /// Access to this MSR is denied.  A #GP should be issued to the vCPU.
+        Deny,
+    }
+
+    #[must_use]
+    #[derive(Copy, Clone)]
+    pub enum WriteResult {
+        /// Successful write of value
+        Accept,
+        /// Access to this MSR is denied.  A #GP should be issued to the vCPU.
+        Deny,
+    }
+
+    #[derive(Clone)]
+    pub struct Msrs(BTreeMap<u32, Entry>);
+    impl Msrs {
+        pub fn new() -> Self {
+            Self(BTreeMap::new())
+        }
+        pub fn rdmsr(&self, msr: u32) -> Option<ReadResult> {
+            self.0.get(&msr).map(Entry::rdmsr)
+        }
+        pub fn wrmsr(&mut self, msr: u32, val: u64) -> Option<WriteResult> {
+            self.0.get_mut(&msr).map(|ent| ent.wrmsr(val))
+        }
+        pub fn set(&mut self, msr: u32, entry: Entry) -> Option<Entry> {
+            self.0.insert(msr, entry)
+        }
+        pub fn clear(&mut self) {
+            self.0.clear();
+        }
     }
 }
 
@@ -1307,4 +1418,6 @@ pub mod migrate {
 mod bits {
     pub const MSR_DEBUGCTL: u32 = 0x1d9;
     pub const MSR_EFER: u32 = 0xc0000080;
+
+    pub const IDT_GP: u8 = 0xd;
 }
