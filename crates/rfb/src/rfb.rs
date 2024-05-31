@@ -37,13 +37,18 @@ pub enum ProtocolError {
 }
 
 pub trait ReadMessage {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>>
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<Self, ProtocolError>>
     where
         Self: Sized;
 }
 
 pub trait WriteMessage {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>>;
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>>;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
@@ -54,7 +59,9 @@ pub enum ProtoVersion {
 }
 
 impl ReadMessage for ProtoVersion {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<Self, ProtocolError>> {
         async move {
             let mut buf = [0u8; 12];
             stream.read_exact(&mut buf).await?;
@@ -71,7 +78,10 @@ impl ReadMessage for ProtoVersion {
 }
 
 impl WriteMessage for ProtoVersion {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             let s = match self {
                 ProtoVersion::Rfb33 => b"RFB 003.003\n",
@@ -96,7 +106,10 @@ pub enum SecurityType {
 }
 
 impl WriteMessage for SecurityTypes {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             // TODO: fix cast
             stream.write_u8(self.0.len() as u8).await?;
@@ -111,7 +124,9 @@ impl WriteMessage for SecurityTypes {
 }
 
 impl ReadMessage for SecurityType {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<Self, ProtocolError>> {
         async move {
             let t = stream.read_u8().await?;
             match t {
@@ -125,7 +140,10 @@ impl ReadMessage for SecurityType {
 }
 
 impl WriteMessage for SecurityType {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             let val = match self {
                 SecurityType::None => 0,
@@ -146,7 +164,10 @@ pub enum SecurityResult {
 }
 
 impl WriteMessage for SecurityResult {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             match self {
                 SecurityResult::Success => {
@@ -171,7 +192,9 @@ pub struct ClientInit {
 }
 
 impl ReadMessage for ClientInit {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<Self, ProtocolError>> {
         async {
             let flag = stream.read_u8().await?;
             match flag {
@@ -192,17 +215,21 @@ pub struct ServerInit {
 }
 
 impl ServerInit {
-    pub fn new(width: u16, height: u16, name: String, pixel_format: PixelFormat) -> Self {
-        Self {
-            initial_res: Resolution { width, height },
-            pixel_format,
-            name,
-        }
+    pub fn new(
+        width: u16,
+        height: u16,
+        name: String,
+        pixel_format: PixelFormat,
+    ) -> Self {
+        Self { initial_res: Resolution { width, height }, pixel_format, name }
     }
 }
 
 impl WriteMessage for ServerInit {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             self.initial_res.write_to(stream).await?;
             self.pixel_format.write_to(stream).await?;
@@ -233,7 +260,11 @@ impl FramebufferUpdate {
         FramebufferUpdate { rectangles }
     }
 
-    pub fn transform(&self, input_pf: &PixelFormat, output_pf: &PixelFormat) -> Self {
+    pub fn transform(
+        &self,
+        input_pf: &PixelFormat,
+        output_pf: &PixelFormat,
+    ) -> Self {
         let mut rectangles = Vec::new();
 
         for r in self.rectangles.iter() {
@@ -251,7 +282,9 @@ pub(crate) struct Position {
 }
 
 impl ReadMessage for Position {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<Self, ProtocolError>> {
         async {
             let x = stream.read_u16().await?;
             let y = stream.read_u16().await?;
@@ -269,7 +302,9 @@ pub(crate) struct Resolution {
 }
 
 impl ReadMessage for Resolution {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<Self, ProtocolError>> {
         async {
             let width = stream.read_u16().await?;
             let height = stream.read_u16().await?;
@@ -281,7 +316,10 @@ impl ReadMessage for Resolution {
 }
 
 impl WriteMessage for Resolution {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             stream.write_u16(self.width).await?;
             stream.write_u16(self.height).await?;
@@ -298,7 +336,13 @@ pub struct Rectangle {
 }
 
 impl Rectangle {
-    pub fn new(x: u16, y: u16, width: u16, height: u16, data: Box<dyn Encoding>) -> Self {
+    pub fn new(
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        data: Box<dyn Encoding>,
+    ) -> Self {
         Rectangle {
             position: Position { x, y },
             dimensions: Resolution { width, height },
@@ -306,7 +350,11 @@ impl Rectangle {
         }
     }
 
-    pub fn transform(&self, input_pf: &PixelFormat, output_pf: &PixelFormat) -> Self {
+    pub fn transform(
+        &self,
+        input_pf: &PixelFormat,
+        output_pf: &PixelFormat,
+    ) -> Self {
         Rectangle {
             position: self.position,
             dimensions: self.dimensions,
@@ -316,7 +364,10 @@ impl Rectangle {
 }
 
 impl WriteMessage for Rectangle {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             let encoding_type: i32 = self.data.get_type().into();
 
@@ -336,7 +387,10 @@ impl WriteMessage for Rectangle {
 }
 
 impl WriteMessage for FramebufferUpdate {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             // TODO: type function?
             stream.write_u8(0).await?;
@@ -389,36 +443,11 @@ pub struct PixelFormat {
 }
 
 impl PixelFormat {
-    /// Constructor for a PixelFormat that uses a color format to specify colors.
-    pub fn new_colorformat(
-        bbp: u8,
-        depth: u8,
-        big_endian: bool,
-        red_shift: u8,
-        red_max: u16,
-        green_shift: u8,
-        green_max: u16,
-        blue_shift: u8,
-        blue_max: u16,
-    ) -> Self {
-        PixelFormat {
-            bits_per_pixel: bbp,
-            depth,
-            big_endian,
-            color_spec: ColorSpecification::ColorFormat(ColorFormat {
-                red_max,
-                green_max,
-                blue_max,
-                red_shift,
-                green_shift,
-                blue_shift,
-            }),
-        }
-    }
-
     /// Returns true if the pixel format is RGB888 (8-bits per color and 32 bits per pixel).
     pub fn is_rgb_888(&self) -> bool {
-        if self.bits_per_pixel != rgb_888::BITS_PER_PIXEL || self.depth != rgb_888::DEPTH {
+        if self.bits_per_pixel != rgb_888::BITS_PER_PIXEL
+            || self.depth != rgb_888::DEPTH
+        {
             return false;
         }
 
@@ -437,15 +466,13 @@ impl PixelFormat {
 }
 
 impl ReadMessage for PixelFormat {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<Self, ProtocolError>> {
         async {
             let bits_per_pixel = stream.read_u8().await?;
             let depth = stream.read_u8().await?;
             let be_flag = stream.read_u8().await?;
-            let big_endian = match be_flag {
-                0 => false,
-                _ => true,
-            };
             let color_spec = ColorSpecification::read_from(stream).await?;
 
             // 3 bytes of padding
@@ -455,7 +482,7 @@ impl ReadMessage for PixelFormat {
             Ok(Self {
                 bits_per_pixel,
                 depth,
-                big_endian,
+                big_endian: be_flag != 0,
                 color_spec,
             })
         }
@@ -464,7 +491,10 @@ impl ReadMessage for PixelFormat {
 }
 
 impl WriteMessage for PixelFormat {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             stream.write_u8(self.bits_per_pixel).await?;
             stream.write_u8(self.depth).await?;
@@ -503,7 +533,9 @@ pub struct ColorFormat {
 pub struct ColorMap {}
 
 impl ReadMessage for ColorSpecification {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<Self, ProtocolError>> {
         async {
             let tc_flag = stream.read_u8().await?;
             match tc_flag {
@@ -537,7 +569,10 @@ impl ReadMessage for ColorSpecification {
 }
 
 impl WriteMessage for ColorSpecification {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to(
+        self,
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<(), ProtocolError>> {
         async move {
             match self {
                 ColorSpecification::ColorFormat(cf) => {
@@ -572,12 +607,12 @@ pub enum ClientMessage {
 }
 
 impl ReadMessage for ClientMessage {
-    fn read_from<'a>(
-        stream: &'a mut TcpStream,
-    ) -> BoxFuture<'a, Result<ClientMessage, ProtocolError>> {
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<ClientMessage, ProtocolError>> {
         async {
             let t = stream.read_u8().await?;
-            let res = match t {
+            match t {
                 0 => {
                     // SetPixelFormat
                     let mut padding = [0u8; 3];
@@ -603,10 +638,7 @@ impl ReadMessage for ClientMessage {
                 }
                 3 => {
                     // FramebufferUpdateRequest
-                    let incremental = match stream.read_u8().await? {
-                        0 => false,
-                        _ => true,
-                    };
+                    let incremental = stream.read_u8().await? != 0;
                     let position = Position::read_from(stream).await?;
                     let resolution = Resolution::read_from(stream).await?;
 
@@ -620,10 +652,7 @@ impl ReadMessage for ClientMessage {
                 }
                 4 => {
                     // KeyEvent
-                    let is_pressed = match stream.read_u8().await? {
-                        0 => false,
-                        _ => true,
-                    };
+                    let is_pressed = stream.read_u8().await? != 0;
 
                     // 2 bytes of padding
                     stream.read_u16().await?;
@@ -631,11 +660,7 @@ impl ReadMessage for ClientMessage {
                     let keysym_raw = stream.read_u32().await?;
                     let keysym = KeySym::try_from(keysym_raw)?;
 
-                    let key_event = KeyEvent {
-                        is_pressed,
-                        keysym,
-                        keysym_raw,
-                    };
+                    let key_event = KeyEvent { is_pressed, keysym, keysym_raw };
 
                     Ok(ClientMessage::KeyEvent(key_event))
                 }
@@ -657,15 +682,15 @@ impl ReadMessage for ClientMessage {
 
                     // TODO: The encoding RFB uses is ISO 8859-1 (Latin-1), which is a subset of
                     // utf-8. Determine if this is the right approach.
-                    let text =
-                        String::from_utf8(buf).map_err(|_| ProtocolError::InvalidTextEncoding)?;
+                    let text = String::from_utf8(buf)
+                        .map_err(|_| ProtocolError::InvalidTextEncoding)?;
 
                     Ok(ClientMessage::ClientCutText(text))
                 }
-                unknown => Err(ProtocolError::UnknownClientMessageType(unknown)),
-            };
-
-            res
+                unknown => {
+                    Err(ProtocolError::UnknownClientMessageType(unknown))
+                }
+            }
         }
         .boxed()
     }
@@ -721,7 +746,9 @@ pub struct PointerEvent {
 }
 
 impl ReadMessage for PointerEvent {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from(
+        stream: &mut TcpStream,
+    ) -> BoxFuture<Result<Self, ProtocolError>> {
         async {
             let button_mask = stream.read_u8().await?;
             let pressed = MouseButtons::from_bits_truncate(button_mask);

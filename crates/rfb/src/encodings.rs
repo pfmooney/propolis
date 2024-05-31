@@ -40,7 +40,11 @@ where
     fn encode(&self) -> &Vec<u8>;
 
     /// Translates this encoding type from an input pixel format to an output format.
-    fn transform(&self, input: &PixelFormat, output: &PixelFormat) -> Box<dyn Encoding>;
+    fn transform(
+        &self,
+        input: &PixelFormat,
+        output: &PixelFormat,
+    ) -> Box<dyn Encoding>;
 }
 
 impl From<EncodingType> for i32 {
@@ -105,14 +109,18 @@ impl Encoding for RawEncoding {
         &self.pixels
     }
 
-    fn transform(&self, input: &PixelFormat, output: &PixelFormat) -> Box<dyn Encoding> {
+    fn transform(
+        &self,
+        input: &PixelFormat,
+        output: &PixelFormat,
+    ) -> Box<dyn Encoding> {
         // XXX: This assumes the pixel formats are both rgb888. The server code verifies this
         // before calling.
         assert!(input.is_rgb_888());
         assert!(output.is_rgb_888());
 
         Box::new(Self {
-            pixels: rgb_888::transform(&self.pixels, &input, &output),
+            pixels: rgb_888::transform(&self.pixels, input, output),
         })
     }
 }

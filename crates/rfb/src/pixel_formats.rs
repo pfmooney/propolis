@@ -78,7 +78,9 @@ pub mod fourcc {
     pub const FOURCC_BX24: u32 = 0x34325842; // little-endian BGRx, 8:8:8:8
     pub const FOURCC_XB24: u32 = 0x34324258; // little-endian xBGR, 8:8:8:8
 
-    pub fn fourcc_to_pixel_format(fourcc: u32) -> Result<PixelFormat, PixelFormatError> {
+    pub fn fourcc_to_pixel_format(
+        fourcc: u32,
+    ) -> Result<PixelFormat, PixelFormatError> {
         match fourcc {
             // little-endian xRGB
             FOURCC_XR24 => Ok(PixelFormat {
@@ -90,8 +92,8 @@ pub mod fourcc {
                     green_max: rgb_888::MAX_VALUE,
                     blue_max: rgb_888::MAX_VALUE,
                     red_shift: rgb_888::BITS_PER_COLOR * 2,
-                    green_shift: rgb_888::BITS_PER_COLOR * 1,
-                    blue_shift: rgb_888::BITS_PER_COLOR * 0,
+                    green_shift: rgb_888::BITS_PER_COLOR,
+                    blue_shift: 0,
                 }),
             }),
 
@@ -106,7 +108,7 @@ pub mod fourcc {
                     blue_max: rgb_888::MAX_VALUE,
                     red_shift: rgb_888::BITS_PER_COLOR * 3,
                     green_shift: rgb_888::BITS_PER_COLOR * 2,
-                    blue_shift: rgb_888::BITS_PER_COLOR * 1,
+                    blue_shift: rgb_888::BITS_PER_COLOR,
                 }),
             }),
 
@@ -119,7 +121,7 @@ pub mod fourcc {
                     red_max: rgb_888::MAX_VALUE,
                     green_max: rgb_888::MAX_VALUE,
                     blue_max: rgb_888::MAX_VALUE,
-                    red_shift: rgb_888::BITS_PER_COLOR * 1,
+                    red_shift: rgb_888::BITS_PER_COLOR,
                     green_shift: rgb_888::BITS_PER_COLOR * 2,
                     blue_shift: rgb_888::BITS_PER_COLOR * 3,
                 }),
@@ -134,8 +136,8 @@ pub mod fourcc {
                     red_max: rgb_888::MAX_VALUE,
                     green_max: rgb_888::MAX_VALUE,
                     blue_max: rgb_888::MAX_VALUE,
-                    red_shift: rgb_888::BITS_PER_COLOR * 0,
-                    green_shift: rgb_888::BITS_PER_COLOR * 1,
+                    red_shift: 0,
+                    green_shift: rgb_888::BITS_PER_COLOR,
                     blue_shift: rgb_888::BITS_PER_COLOR * 2,
                 }),
             }),
@@ -202,7 +204,11 @@ pub mod rgb_888 {
     }
 
     /// Translate between RGB888 formats. The input and output format must both be RGB888.
-    pub fn transform(pixels: &Vec<u8>, input: &PixelFormat, output: &PixelFormat) -> Vec<u8> {
+    pub fn transform(
+        pixels: &[u8],
+        input: &PixelFormat,
+        output: &PixelFormat,
+    ) -> Vec<u8> {
         assert!(input.is_rgb_888());
         assert!(output.is_rgb_888());
 
@@ -297,16 +303,20 @@ mod tests {
         let pixels = vec![0u8, 1u8, 2u8, 3u8];
 
         // little-endian xRGB
-        let xrgb_le = fourcc::fourcc_to_pixel_format(fourcc::FOURCC_XR24).unwrap();
+        let xrgb_le =
+            fourcc::fourcc_to_pixel_format(fourcc::FOURCC_XR24).unwrap();
 
         // little-endian RGBx
-        let rgbx_le = fourcc::fourcc_to_pixel_format(fourcc::FOURCC_RX24).unwrap();
+        let rgbx_le =
+            fourcc::fourcc_to_pixel_format(fourcc::FOURCC_RX24).unwrap();
 
         // little-endian BGRx
-        let bgrx_le = fourcc::fourcc_to_pixel_format(fourcc::FOURCC_BX24).unwrap();
+        let bgrx_le =
+            fourcc::fourcc_to_pixel_format(fourcc::FOURCC_BX24).unwrap();
 
         // little-endian xBGR
-        let xbgr_le = fourcc::fourcc_to_pixel_format(fourcc::FOURCC_XB24).unwrap();
+        let xbgr_le =
+            fourcc::fourcc_to_pixel_format(fourcc::FOURCC_XB24).unwrap();
 
         // same pixel format
         assert_eq!(transform(&pixels, &xrgb_le, &xrgb_le), pixels);

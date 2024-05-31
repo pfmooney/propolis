@@ -13,7 +13,8 @@ use image::GenericImageView;
 use log::info;
 use rfb::encodings::RawEncoding;
 use rfb::rfb::{
-    FramebufferUpdate, KeyEvent, PixelFormat, ProtoVersion, Rectangle, SecurityType, SecurityTypes,
+    ColorFormat, ColorSpecification, FramebufferUpdate, KeyEvent, PixelFormat,
+    ProtoVersion, Rectangle, SecurityType, SecurityTypes,
 };
 use rfb::{
     pixel_formats::rgb_888,
@@ -85,26 +86,28 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     validate_order(args.red_order, args.green_order, args.blue_order)?;
 
-    let pf = PixelFormat::new_colorformat(
-        rgb_888::BITS_PER_PIXEL,
-        rgb_888::DEPTH,
-        args.big_endian,
-        order_to_shift(args.red_order),
-        rgb_888::MAX_VALUE,
-        order_to_shift(args.green_order),
-        rgb_888::MAX_VALUE,
-        order_to_shift(args.blue_order),
-        rgb_888::MAX_VALUE,
-    );
-    info!(
-        "Starting server: image: {:?}, pixel format; {:#?}",
-        args.image, pf
-    );
+    let pf = PixelFormat {
+        bits_per_pixel: rgb_888::BITS_PER_PIXEL,
+        depth: rgb_888::DEPTH,
+        big_endian: args.big_endian,
+        color_spec: ColorSpecification::ColorFormat(ColorFormat {
+            red_max: rgb_888::MAX_VALUE,
+            green_max: rgb_888::MAX_VALUE,
+            blue_max: rgb_888::MAX_VALUE,
+            red_shift: order_to_shift(args.red_order),
+            green_shift: order_to_shift(args.green_order),
+            blue_shift: order_to_shift(args.blue_order),
+        }),
+    };
+    info!("Starting server: image: {:?}, pixel format; {:#?}", args.image, pf);
 
     let config = VncServerConfig {
         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 9000),
         version: ProtoVersion::Rfb38,
-        sec_types: SecurityTypes(vec![SecurityType::None, SecurityType::VncAuthentication]),
+        sec_types: SecurityTypes(vec![
+            SecurityType::None,
+            SecurityType::VncAuthentication,
+        ]),
         name: "rfb-example-server".to_string(),
     };
     let data = VncServerData {
@@ -172,7 +175,11 @@ fn generate_color(index: u8, big_endian: bool) -> Vec<u8> {
     pixels
 }
 
-fn generate_image(name: &str, big_endian: bool, rgb_order: (u8, u8, u8)) -> Vec<u8> {
+fn generate_image(
+    name: &str,
+    big_endian: bool,
+    rgb_order: (u8, u8, u8),
+) -> Vec<u8> {
     const LEN: usize = WIDTH * HEIGHT * rgb_888::BYTES_PER_PIXEL;
     let mut pixels = vec![0xffu8; LEN];
 
@@ -201,14 +208,24 @@ fn generate_image(name: &str, big_endian: bool, rgb_order: (u8, u8, u8)) -> Vec<
     pixels
 }
 
-fn generate_pixels(img: Image, big_endian: bool, rgb_order: (u8, u8, u8)) -> Vec<u8> {
+fn generate_pixels(
+    img: Image,
+    big_endian: bool,
+    rgb_order: (u8, u8, u8),
+) -> Vec<u8> {
     const LEN: usize = WIDTH * HEIGHT * rgb_888::BYTES_PER_PIXEL;
 
     let (r, g, b) = rgb_order;
 
     match img {
-        Image::Oxide => generate_image("image-examples/oxide.png", big_endian, rgb_order),
-        Image::ColorBars => generate_image("image-examples/color-bars.png", big_endian, rgb_order),
+        Image::Oxide => {
+            generate_image("image-examples/oxide.png", big_endian, rgb_order)
+        }
+        Image::ColorBars => generate_image(
+            "image-examples/color-bars.png",
+            big_endian,
+            rgb_order,
+        ),
         Image::Red => generate_color(r, big_endian),
         Image::Green => generate_color(g, big_endian),
         Image::Blue => generate_color(b, big_endian),
@@ -222,7 +239,8 @@ impl Server for ExampleServer {
     async fn get_framebuffer_update(&self) -> FramebufferUpdate {
         let pixels_width = 1024;
         let pixels_height = 768;
-        let pixels = generate_pixels(self.display, self.big_endian, self.rgb_order);
+        let pixels =
+            generate_pixels(self.display, self.big_endian, self.rgb_order);
         let r = Rectangle::new(
             0,
             0,
