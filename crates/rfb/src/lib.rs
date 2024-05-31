@@ -9,3 +9,6 @@ pub mod keysym;
 pub mod pixel_formats;
 pub mod rfb;
 pub mod server;
+
+#[cfg(feature = "tungstenite")]
+pub mod tungstenite;

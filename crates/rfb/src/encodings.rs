@@ -9,84 +9,42 @@ use crate::{
     rfb::{PixelFormat, Position, Resolution},
 };
 
-use EncodingType::*;
+use strum::FromRepr;
 
-#[derive(Debug)]
-#[allow(unused)]
+#[derive(Debug, FromRepr, Ord, PartialOrd, Eq, PartialEq)]
+#[repr(i32)]
 pub enum EncodingType {
-    Raw,
-    CopyRect,
-    RRE,
-    Hextile,
-    TRLE,
-    ZRLE,
-    CursorPseudo,
-    DesktopSizePseudo,
-    JRLE,
-    ZRLE2,
-    JPEG,
-    Zlib,
-    CursorWithAlpha,
-    Other(i32),
+    Raw = 0,
+    CopyRect = 1,
+    RRE = 2,
+    CoRRE = 4,
+    Hextile = 5,
+    Zlib = 6,
+    TRLE = 15,
+    ZRLE = 16,
+    JPEG = 21,
+    JRLE = 22,
+    ZRLE2 = 24,
+    DesktopSizePseudo = -223,
+    LastRectPseudo = -224,
+    CursorPseudo = -239,
+    ContinuousUpdatesPseudo = -313,
 }
 
-pub trait Encoding
-where
-    Self: Send,
-{
+pub trait Encoding: Send {
     fn get_type(&self) -> EncodingType;
 
-    /// Transform this encoding from its representation into a byte vector that can be passed to the client.
-    fn encode(&self) -> &Vec<u8>;
+    /// Transform this encoding from its representation into a byte vector that
+    /// can be passed to the client.
+    fn encode(&self) -> &[u8];
 
-    /// Translates this encoding type from an input pixel format to an output format.
+    /// Translates this encoding type from an input pixel format to an output
+    /// format.
     fn transform(
         &self,
         input: &PixelFormat,
         output: &PixelFormat,
     ) -> Box<dyn Encoding>;
-}
-
-impl From<EncodingType> for i32 {
-    fn from(e: EncodingType) -> Self {
-        match e {
-            Raw => 0,
-            CopyRect => 1,
-            RRE => 2,
-            Hextile => 5,
-            TRLE => 15,
-            ZRLE => 16,
-            CursorPseudo => -239,
-            DesktopSizePseudo => -223,
-            JRLE => 22,
-            ZRLE2 => 24,
-            JPEG => 21,
-            Zlib => 6,
-            CursorWithAlpha => -314,
-            Other(n) => n,
-        }
-    }
-}
-
-impl From<i32> for EncodingType {
-    fn from(value: i32) -> Self {
-        match value {
-            0 => Raw,
-            1 => CopyRect,
-            2 => RRE,
-            5 => Hextile,
-            15 => TRLE,
-            16 => ZRLE,
-            -239 => CursorPseudo,
-            -223 => DesktopSizePseudo,
-            22 => JRLE,
-            24 => ZRLE2,
-            21 => JPEG,
-            6 => Zlib,
-            -314 => CursorWithAlpha,
-            v => EncodingType::Other(v),
-        }
-    }
 }
 
 /// Section 7.7.1
@@ -105,7 +63,7 @@ impl Encoding for RawEncoding {
         EncodingType::Raw
     }
 
-    fn encode(&self) -> &Vec<u8> {
+    fn encode(&self) -> &[u8] {
         &self.pixels
     }
 

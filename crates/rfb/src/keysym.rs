@@ -145,12 +145,8 @@ pub enum KeySym {
     KeypadPgUp,
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("unknown keysym: 0x{0:x}")]
-pub struct KeySymError(u32);
-
 impl TryFrom<u32> for KeySym {
-    type Error = KeySymError;
+    type Error = ();
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
@@ -224,7 +220,7 @@ impl TryFrom<u32> for KeySym {
             KEYSYM_KP_PERIOD => Ok(KeypadPeriod),
             KEYSYM_KP_DELETE => Ok(KeypadDelete),
 
-            _ => Err(KeySymError(value)),
+            _ => Err(()),
         }
     }
 }
