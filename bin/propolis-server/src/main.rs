@@ -2,21 +2,21 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use anyhow::{anyhow, Context};
-use clap::Parser;
-use dropshot::{ConfigDropshot, HandlerTaskMode, HttpServerStarter};
-use futures::join;
-use propolis::usdt::register_probes;
-use slog::info;
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use propolis::usdt::register_probes;
 use propolis_server::{
     config,
     server::{self, MetricsEndpointConfig},
-    vnc::setup_vnc,
+    vnc,
 };
+
+use anyhow::{anyhow, Context};
+use clap::Parser;
+use dropshot::{ConfigDropshot, HandlerTaskMode, HttpServerStarter};
+use slog::info;
 
 #[derive(Debug, Parser)]
 #[clap(about, version)]
@@ -36,12 +36,9 @@ enum Args {
         #[clap(long, action)]
         metric_addr: Option<SocketAddr>,
 
-        #[clap(
-            name = "VNC_IP:PORT",
-            default_value_t = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 5900),
-            action
-        )]
-        vnc_addr: SocketAddr,
+        /// IP:Port for raw TCP access to VNC console
+        #[clap(name = "VNC_IP:PORT", action)]
+        vnc_addr: Option<SocketAddr>,
     },
 }
 
@@ -61,7 +58,7 @@ async fn run_server(
     config_app: config::Config,
     config_dropshot: dropshot::ConfigDropshot,
     metrics_addr: Option<SocketAddr>,
-    vnc_addr: SocketAddr,
+    vnc_addr: Option<SocketAddr>,
     log: slog::Logger,
 ) -> anyhow::Result<()> {
     use propolis::api_version;
@@ -77,8 +74,6 @@ async fn run_server(
         Err(e).context("API version checks")?;
     }
 
-    let vnc_server = setup_vnc(&log, vnc_addr);
-    let vnc_server_hdl = vnc_server.clone();
     let use_reservoir = config::reservoir_decide(&log);
 
     let config_metrics = metrics_addr.map(|addr| {
@@ -90,11 +85,23 @@ async fn run_server(
 
     let context = server::DropshotEndpointContext::new(
         config_app,
-        vnc_server,
         use_reservoir,
         log.new(slog::o!()),
         config_metrics,
     );
+
+    // Start TCP listener for VNC, if requested
+    let tcp_vnc = match vnc_addr {
+        Some(addr) => Some(
+            vnc::TcpSock::new(
+                context.services.vnc_server.clone(),
+                addr,
+                log.clone(),
+            )
+            .await?,
+        ),
+        None => None,
+    };
 
     info!(log, "Starting server...");
 
@@ -107,9 +114,15 @@ async fn run_server(
     .map_err(|error| anyhow!("Failed to start server: {}", error))?
     .start();
 
-    let server_res = join!(server, vnc_server_hdl.start()).0;
+    let result =
+        server.await.map_err(|e| anyhow!("Server exited with an error: {}", e));
 
-    server_res.map_err(|e| anyhow!("Server exited with an error: {}", e))
+    // Clean up any VNC TCP socket
+    if let Some(vnc) = tcp_vnc {
+        vnc.halt().await
+    }
+
+    result
 }
 
 fn build_logger() -> slog::Logger {

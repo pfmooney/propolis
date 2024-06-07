@@ -35,7 +35,7 @@ use propolis_api_types::instance_spec::{
 };
 
 pub use propolis_server_config::Config as VmTomlConfig;
-use rfb::server::VncServer;
+use rfb::tungstenite::BinaryWs;
 use slog::{error, info, o, warn, Logger};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, MappedMutexGuard, Mutex, MutexGuard};
@@ -45,7 +45,7 @@ use tokio_tungstenite::WebSocketStream;
 use crate::spec::{ServerSpecBuilder, ServerSpecBuilderError};
 use crate::stats::virtual_machine::VirtualMachine;
 use crate::vm::VmController;
-use crate::vnc::PropolisVncServer;
+use crate::vnc::{self, VncServer};
 
 pub(crate) type DeviceMap =
     BTreeMap<String, Arc<dyn propolis::common::Lifecycle>>;
@@ -201,7 +201,7 @@ pub struct ServiceProviders {
     /// The VNC server hosted within this process. Note that this server always
     /// exists irrespective of whether there is an instance. Creating an
     /// instance hooks this server up to the instance's framebuffer.
-    vnc_server: Arc<VncServer<PropolisVncServer>>,
+    pub vnc_server: Arc<VncServer>,
 }
 
 impl ServiceProviders {
@@ -252,7 +252,6 @@ impl DropshotEndpointContext {
     /// Creates a new server context object.
     pub fn new(
         config: VmTomlConfig,
-        vnc_server: Arc<VncServer<PropolisVncServer>>,
         use_reservoir: bool,
         log: slog::Logger,
         metric_config: Option<MetricsEndpointConfig>,
@@ -270,7 +269,7 @@ impl DropshotEndpointContext {
                     server: None,
                     stats: None,
                 }),
-                vnc_server,
+                vnc_server: VncServer::new(log.clone()),
             }),
             log,
         }
@@ -576,29 +575,11 @@ async fn instance_ensure_common(
         HttpError::for_internal_error(format!("failed to create instance: {e}"))
     })?;
 
-    if let Some(ramfb) = vm.framebuffer() {
-        // Get a framebuffer description from the wrapped instance.
-        let fb_spec = ramfb.get_framebuffer_spec();
-        let vnc_fb = crate::vnc::RamFb::new(fb_spec);
-
-        // Get a reference to the PS2 controller so that we can pass keyboard input.
-        let ps2ctrl = vm.ps2ctrl().clone();
-
-        // Get a reference to the outward-facing VNC server in this process.
-        let vnc_server = server_context.services.vnc_server.clone();
-
-        // Initialize the Propolis VNC adapter with references to the VM's Instance,
-        // framebuffer, and PS2 controller.
-        vnc_server.server.initialize(vnc_fb, ps2ctrl, vm.clone()).await;
-
-        // Hook up the framebuffer notifier to update the Propolis VNC adapter
-        let notifier_server_ref = vnc_server.clone();
-        let rt = tokio::runtime::Handle::current();
-        ramfb.set_notifier(Box::new(move |config, is_valid| {
-            let vnc = notifier_server_ref.clone();
-            rt.block_on(vnc.server.update(config, is_valid, &vnc));
-        }));
-    }
+    // Attach the VNC server machinery to the framebuffer and input devices
+    server_context
+        .services
+        .vnc_server
+        .attach(vm.ps2ctrl().clone(), vm.framebuffer().clone());
 
     let mut serial_task = server_context.services.serial_task.lock().await;
     if serial_task.is_none() {
@@ -917,6 +898,41 @@ async fn instance_serial(
         .map_err(|e| format!("Serial socket hand-off failed: {}", e).into())
 }
 
+#[channel {
+    protocol = WEBSOCKETS,
+    path = "/instance/vnc",
+}]
+async fn instance_vnc(
+    rqctx: RequestContext<Arc<DropshotEndpointContext>>,
+    _query: Query<()>,
+    websock: WebsocketConnection,
+) -> dropshot::WebsocketChannelResult {
+    let ctx = rqctx.context();
+
+    let ws_stream = WebSocketStream::from_raw_socket(
+        websock.into_inner(),
+        Role::Server,
+        None,
+    )
+    .await;
+
+    if let Err(e) = ctx
+        .services
+        .vnc_server
+        .connect(
+            Box::new(BinaryWs::new(ws_stream)) as Box<dyn vnc::Connection>,
+            rqctx.request_id.clone(),
+        )
+        .await
+    {
+        // Log the error, but since the request has already been upgraded, there
+        // is no sense in trying to emit a formal error to the client
+        error!(rqctx.log, "VNC initialization failed: {:?}", e);
+    }
+
+    Ok(())
+}
+
 // This endpoint is meant to only be called during a migration from the destination
 // instance to the source instance as part of the HTTP connection upgrade used to
 // establish the migration link. We don't actually want this exported via OpenAPI
@@ -1134,6 +1150,7 @@ pub fn api() -> ApiDescription<Arc<DropshotEndpointContext>> {
     api.register(disk_volume_status).unwrap();
     api.register(instance_issue_crucible_vcr_request).unwrap();
     api.register(instance_issue_nmi).unwrap();
+    api.register(instance_vnc).unwrap();
 
     api
 }

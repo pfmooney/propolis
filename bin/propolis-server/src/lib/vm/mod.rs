@@ -171,8 +171,8 @@ pub(crate) struct VmObjects {
     /// connection to a guest's serial console.
     com1: Arc<Serial<LpcUart>>,
 
-    /// An optional reference to the guest's framebuffer.
-    framebuffer: Option<Arc<RamFb>>,
+    /// A reference to the guest's framebuffer.
+    framebuffer: Arc<RamFb>,
 
     /// A reference to the guest's PS/2 controller.
     ps2ctrl: Arc<PS2Ctrl>,
@@ -513,7 +513,7 @@ impl VmController {
                 block_backends,
                 crucible_backends,
                 com1,
-                framebuffer: Some(ramfb),
+                framebuffer: ramfb,
                 ps2ctrl,
                 monitor_rx,
             },
@@ -584,8 +584,8 @@ impl VmController {
         &self.vm_objects.com1
     }
 
-    pub fn framebuffer(&self) -> Option<&Arc<RamFb>> {
-        self.vm_objects.framebuffer.as_ref()
+    pub fn framebuffer(&self) -> &Arc<RamFb> {
+        &self.vm_objects.framebuffer
     }
 
     pub fn ps2ctrl(&self) -> &Arc<PS2Ctrl> {
