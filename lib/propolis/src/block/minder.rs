@@ -8,8 +8,9 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::task::{Context, Poll};
 use std::time::Instant;
 
@@ -44,6 +45,27 @@ pub trait DeviceQueue: Send + Sync + 'static {
         result: block::Result,
         token: Self::Token,
     );
+
+    fn complete_bulk(&self, completions: BulkCompletions<Self::Token>) {
+        for (op, result, token) in completions {
+            self.complete(op, result, token)
+        }
+    }
+}
+
+pub struct BulkCompletions<T: Send + Sync + 'static> {
+    items: std::vec::IntoIter<QmResult>,
+    _phantom: PhantomData<T>,
+}
+impl<T: Send + Sync + 'static> Iterator for BulkCompletions<T> {
+    type Item = (block::Operation, block::Result, T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let QmResult { token, op, result, .. } = self.items.next()?;
+        let token =
+            token.downcast::<T>().expect("token should successfully downcast");
+        Some((op, result, *token))
+    }
 }
 
 /// A wrapper for an IO [Request] bearing necessary tracking information to
@@ -104,11 +126,30 @@ type CompleteReqFn = Box<
     dyn Fn(Operation, block::Result, Box<dyn Any + Send + Sync>) + Send + Sync,
 >;
 
-struct QmEntry {
+/// Closure to permit [QueueMinder] to type-erase the calling of
+/// [DeviceQueue::complete_bulk()].
+type CompleteBulkFn = Box<dyn Fn(std::vec::IntoIter<QmResult>) + Send + Sync>;
+
+struct QmRequest {
     token: Box<dyn Any + Send + Sync>,
     op: Operation,
     when_queued: Instant,
     when_started: Instant,
+}
+struct QmResult {
+    token: Box<dyn Any + Send + Sync>,
+    op: Operation,
+    result: block::Result,
+    when_processed: Instant,
+}
+impl QmResult {
+    fn from_req(
+        req: QmRequest,
+        result: block::Result,
+        when_processed: Instant,
+    ) -> Self {
+        Self { token: req.token, op: req.op, result, when_processed }
+    }
 }
 
 struct QmInner {
@@ -118,7 +159,8 @@ struct QmInner {
     /// this queue has new entries.
     notify_workers: Bitmap,
     paused: bool,
-    in_flight: BTreeMap<ReqId, QmEntry>,
+    in_flight: BTreeMap<ReqId, QmRequest>,
+    coalesced: Vec<QmResult>,
     metric_consumer: Option<Arc<dyn MetricConsumer>>,
     /// Number of [Request] completions which are currently being processed by
     /// the device.  This is tracked only for requests which are the last entry
@@ -134,6 +176,7 @@ impl Default for QmInner {
             paused: false,
             processing_last: 0,
             in_flight: BTreeMap::new(),
+            coalesced: Vec::new(),
             metric_consumer: None,
         }
     }
@@ -149,6 +192,8 @@ pub(super) struct QueueMinder {
     next_req_fn: NextReqFn,
     /// Type-erased wrapper function for [DeviceQueue::complete()]
     complete_req_fn: CompleteReqFn,
+    /// Type-erased wrapper function for [DeviceQueue::complete_bulk()]
+    complete_bulk_fn: CompleteBulkFn,
 }
 
 impl QueueMinder {
@@ -167,14 +212,21 @@ impl QueueMinder {
             ))
         });
 
+        let complete_queue = queue.clone();
         let complete_req_fn: CompleteReqFn =
             Box::new(move |op, result, token| {
                 let token = token
                     .downcast::<DQ::Token>()
                     .expect("token type unchanged");
                 let token = *token;
-                queue.complete(op, result, token);
+                complete_queue.complete(op, result, token);
             });
+
+        let bulk_queue = queue;
+        let complete_bulk_fn: CompleteBulkFn = Box::new(move |items| {
+            let bulk = BulkCompletions { items, _phantom: PhantomData };
+            bulk_queue.complete_bulk(bulk);
+        });
 
         Arc::new_cyclic(|self_ref| Self {
             queue_id,
@@ -184,6 +236,7 @@ impl QueueMinder {
             notify: Notify::new(),
             next_req_fn,
             complete_req_fn,
+            complete_bulk_fn,
         })
     }
 
@@ -226,7 +279,7 @@ impl QueueMinder {
             let when_started = Instant::now();
             let old = state.in_flight.insert(
                 id,
-                QmEntry {
+                QmRequest {
                     token,
                     op: req.op,
                     when_queued: when_queued.unwrap_or(when_started),
@@ -238,6 +291,7 @@ impl QueueMinder {
             Some(DeviceRequest::new(id, req, self.self_ref.clone()))
         } else {
             state.notify_workers.set(wid);
+            self.flush_coalesced(state, None);
             None
         }
     }
@@ -248,15 +302,10 @@ impl QueueMinder {
         let ent =
             state.in_flight.remove(&id).expect("state for request not lost");
         let metric_consumer = state.metric_consumer.as_ref().map(Arc::clone);
-        let is_last_req = state.in_flight.is_empty();
-        if is_last_req {
-            state.processing_last += 1;
-        }
-        drop(state);
 
-        let when_done = Instant::now();
+        let when_processed = Instant::now();
         let time_queued = ent.when_started.duration_since(ent.when_queued);
-        let time_processed = when_done.duration_since(ent.when_started);
+        let time_processed = when_processed.duration_since(ent.when_started);
 
         let ns_queued = time_queued.as_nanos() as u64;
         let ns_processed = time_processed.as_nanos() as u64;
@@ -285,21 +334,73 @@ impl QueueMinder {
             }
         }
 
-        (self.complete_req_fn)(ent.op, result, ent.token);
-
-        probes::block_completion_sent!(|| {
-            (devqid, id, when_done.elapsed().as_nanos() as u64)
-        });
+        let op = ent.op;
+        if should_coalesce(ent.op, when_processed, &state.coalesced) {
+            // queue for a later coalesced completion
+            state.coalesced.push(QmResult::from_req(
+                ent,
+                result,
+                when_processed,
+            ));
+        } else {
+            // deliver immediately completion (along with any others which have
+            // been coalesced)
+            self.flush_coalesced(
+                state,
+                Some(QmResult::from_req(ent, result, when_processed)),
+            );
+        }
 
         // Report the completion to the metrics consumer, if one exists
         if let Some(consumer) = metric_consumer {
             consumer.request_completed(
                 self.queue_id,
-                ent.op,
+                op,
                 result,
                 time_queued,
                 time_processed,
             );
+        }
+    }
+
+    fn flush_coalesced(
+        &self,
+        mut state: MutexGuard<QmInner>,
+        latest: Option<QmResult>,
+    ) {
+        let devqid = devq_id(self.device_id, self.queue_id);
+        let is_last_req = state.in_flight.is_empty();
+        if is_last_req {
+            state.processing_last += 1;
+        }
+        if let Some(first_req_done) =
+            state.coalesced.get(0).map(|qr| qr.when_processed)
+        {
+            let mut items = std::mem::replace(&mut state.coalesced, Vec::new());
+            if let Some(ent) = latest {
+                items.push(ent);
+            }
+            let count = items.len();
+
+            drop(state);
+            (self.complete_bulk_fn)(items.into_iter());
+
+            probes::block_completion_coalesced!(|| {
+                (devqid, first_req_done.elapsed().as_nanos() as u64, count)
+            });
+        } else {
+            // No coalesced entries to flush
+            //
+            // Deliver completion for latest entry, if passed in
+            drop(state);
+            if let Some(ent) = latest {
+                let QmResult { token, op, result, when_processed } = ent;
+                (self.complete_req_fn)(op, result, token);
+
+                probes::block_completion_single!(|| {
+                    (devqid, when_processed.elapsed().as_nanos() as u64)
+                });
+            }
         }
 
         // We must track how many completions are being processed by the device,
@@ -385,6 +486,28 @@ impl Future for NoneInFlight<'_> {
             }
         }
     }
+}
+
+// Arbitrary limits for now
+const COALESCE_MAX_COUNT: usize = 16;
+const COALESCE_MAX_WAIT_US: usize = 100;
+
+fn should_coalesce(op: Operation, now: Instant, existing: &[QmResult]) -> bool {
+    if op.is_flush() {
+        return false;
+    }
+    if existing.len() >= COALESCE_MAX_COUNT {
+        return false;
+    }
+    if let Some(item) = existing.get(0) {
+        if (item.when_processed.duration_since(now).as_micros() as usize)
+            >= COALESCE_MAX_WAIT_US
+        {
+            return false;
+        }
+    }
+
+    true
 }
 
 /// Unique ID assigned to a given block [Request].
